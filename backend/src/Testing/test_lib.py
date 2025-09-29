@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 # Import after adding to path
 from lib.Metric_Result import MetricResult, MetricType  # noqa: E402
-from lib.LLM_Manager import PurdueLLMManager  # noqa: E402
+from lib.LLM_Manager import LLMManager  # noqa: E402
 from lib.Github_API_Manager import GitHubAPIManager  # noqa: E402
 from lib.HuggingFace_API_Manager import HuggingFaceAPIManager  # noqa: E402
 
@@ -121,7 +121,7 @@ class TestPurdueLLMManager:
         mock_getenv.return_value = "test_api_key"
         
         try:
-            manager = PurdueLLMManager()
+            manager = LLMManager()
             assert manager is not None
         except ImportError:
             # Skip if dependencies not available
@@ -137,7 +137,7 @@ class TestPurdueLLMManager:
         mock_genai.GenerativeModel.return_value = mock_model
         
         try:
-            manager = PurdueLLMManager()
+            manager = LLMManager()
             response = manager.generate_response("Test prompt")
             assert response == "0.75"
         except (ImportError, AttributeError):
@@ -149,7 +149,7 @@ class TestPurdueLLMManager:
         mock_getenv.return_value = None
         
         try:
-            manager = PurdueLLMManager()
+            manager = LLMManager()
             # Should handle missing API key gracefully
             assert manager is not None or manager is None
         except (ImportError, ValueError):

@@ -119,3 +119,5 @@ def setup_test_environment(monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "test_token")
     monkeypatch.setenv("HUGGINGFACE_TOKEN", "test_token")
     monkeypatch.setenv("GOOGLE_AI_API_KEY", "test_key")
+    monkeypatch.setenv("GEN_AI_STUDIO_API_KEY", "test_api_key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test_gemini_key")

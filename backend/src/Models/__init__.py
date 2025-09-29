@@ -9,10 +9,8 @@ This package contains data model classes for handling ML models and datasets:
 
 from .Model import Model
 from .Manager_Models_Model import ModelManager
-from .Manager_Dataset_Model import DatasetManager
 
 __all__ = [
     "Model",
-    "ModelManager",
-    "DatasetManager"
+    "ModelManager"
 ]

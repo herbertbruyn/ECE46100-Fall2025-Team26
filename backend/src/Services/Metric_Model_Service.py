@@ -4,14 +4,14 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from Models import Model
-from lib.LLM_Manager import PurdueLLMManager
+from lib.LLM_Manager import LLMManager
 from lib.Metric_Result import MetricResult, MetricType
 from Helpers import _parse_iso8601, _months_between
 
 
 class ModelMetricService:
     def __init__(self) -> None:
-        self.llm_manager = PurdueLLMManager()
+        self.llm_manager = LLMManager()
 
     def EvaluateModel(
         self, model_description: str, dataset_description: str

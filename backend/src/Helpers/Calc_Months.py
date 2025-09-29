@@ -9,8 +9,23 @@ def _months_between(a: datetime, b: datetime) -> float:
         b: The second datetime (typically the earlier date)
     Returns:
         The approximate number of months between the two dates.
-        Returns 0.0 if the result would be negative.
+        Returns absolute difference in months.
     """
-    # Approx. months using average days per month (30.44)
-    delta_days = (a - b).total_seconds() / 86400.0
-    return max(0.0, delta_days / 30.44)
+    if a is None or b is None:
+        return 0.0
+
+    if a < b:
+        a, b = b, a
+
+    year_diff = a.year - b.year
+    month_diff = a.month - b.month
+    day_diff = a.day - b.day
+    total_months = year_diff * 12 + month_diff
+
+    if day_diff > 0:
+        days_in_month = 30.44
+        total_months += day_diff / days_in_month
+    elif day_diff < 0:
+        total_months -= abs(day_diff) / 30.44
+
+    return max(0.0, abs(total_months))
