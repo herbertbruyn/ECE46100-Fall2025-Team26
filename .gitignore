@@ -9,3 +9,5 @@
 
 # venvs
 .venv/
+
+__pycache__/
