@@ -9,3 +9,6 @@
 
 # venvs
 .venv/
+
+# apple
+.DS_Store
