@@ -3,6 +3,7 @@ from django.shortcuts import render
 import os
 import re
 import sys
+import logging
 from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
@@ -93,6 +94,34 @@ def artifact_create(request, artifact_type: str):
     obj, created = Artifact.objects.get_or_create(
         name=name, type=artifact_type, source_url=url
     )
+
+    # Lineage info
+    if created and artifact_type == "model" and hf:
+        try:
+            model_id = hf.model_link_to_id(url)
+            config = hf.get_model_config(model_id)
+            
+            if config:
+                obj.config_metadata = config
+                parent_id = hf.extract_parent_model(config)
+                
+                if parent_id:
+                    logging.info(f"Found parent model {parent_id} for {name}")
+                    # Create parent artifact if it doesn't exist
+                    parent_url = f"https://huggingface.co/{parent_id}"
+                    parent_name = parent_id.split('/')[-1]
+                    
+                    parent, _ = Artifact.objects.get_or_create(
+                        name=parent_name,
+                        type="model",
+                        defaults={"source_url": parent_url}
+                    )
+                    obj.parents.add(parent)
+                
+                obj.save()
+        except Exception as e:
+            logging.warning(f"Could not extract lineage for {name}: {e}")
+    
     if not created:
         return Response({"detail": "Artifact exists already."}, status=409)
 
@@ -131,4 +160,15 @@ def artifact_by_regex(request):
     if not results:
         return Response({"detail": "No artifact found under this regex."}, status=404)
     return Response(results, status=200)
+
+@api_view(["GET"])
+def artifact_lineage(request, artifact_type: str, id: int):
+    """
+    GET /artifacts/{artifact_type}/{id}/lineage
+    Returns: 200 with the lineage graph
+             404 if not found (Django auto-handled by get_object_or_404)
+    """
+    obj = get_object_or_404(Artifact, pk=id, type=artifact_type)
+    lineage = obj.get_lineage_graph()
+    return Response(lineage, status=200)
 

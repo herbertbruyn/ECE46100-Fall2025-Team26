@@ -7,4 +7,5 @@ urlpatterns = [
     path("artifact/byRegEx", views.artifact_by_regex),             # POST
     re_path(r"^artifact/(?P<artifact_type>(model|dataset|code))$", views.artifact_create), # POST
     re_path(r"^artifacts/(?P<artifact_type>(model|dataset|code))/(?P<id>\d+)$", views.artifact_get), # GET
+    re_path(r"^artifacts/(?P<artifact_type>(model|dataset|code))/(?P<id>\d+)/lineage$", views.artifact_lineage), # GET
 ]

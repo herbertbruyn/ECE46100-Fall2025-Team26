@@ -1,8 +1,9 @@
 import os
 import re
 import logging
+import json
 from typing import Optional
-from huggingface_hub import DatasetInfo, HfApi, ModelInfo
+from huggingface_hub import DatasetInfo, HfApi, ModelInfo, hf_hub_download
 
 
 class HuggingFaceAPIManager:
@@ -76,3 +77,34 @@ class HuggingFaceAPIManager:
                 f"README.md not found for dataset {dataset_id}: {e}"
             )
             return None
+
+    
+    def get_model_config(self, model_id: str) -> Optional[dict]:
+        """Get model configuration from Hugging Face."""
+        try:
+            config_path = hf_hub_download(
+                repo_id=model_id,
+                filename="config.json",
+                token=self.hf_token,
+            )
+            with open(config_path, "r") as f:
+                return json.load(f)
+        except Exception as e:
+            logging.warning(f"Could not get model config for {model_id}: {e}")
+            return None
+
+    
+    def extract_parent_model(self, config: Optional[dict]) -> Optional[str]:
+        """Extract parent model from model configuration."""
+        if not config:
+            return None
+
+        for field in ['base_model_name_or_path', '_name_or_path', 'base_model']:
+            if field in config:
+                parent_model = config[field]
+                if isinstance(parent_model, str) and parent_model:
+                    return parent_model
+
+        return None
+        
+        

@@ -10,6 +10,16 @@ class Artifact(models.Model):
     source_url = models.URLField()
     created_at = models.DateTimeField(auto_now_add=True)
 
+    # For lineage graphs
+    parents = models.ManyToManyField(
+        'self',
+        symmetrical=False,
+        related_name='children',
+        blank=True,
+    )
+
+    config_metadata = models.JSONField(null=True, blank=True)
+
     class Meta:
         unique_together = [("name", "type", "source_url")]
         # This gives us a predictable 409 on duplicate create
@@ -20,3 +30,22 @@ class Artifact(models.Model):
 
     def to_artifact_view(self) -> dict:
         return {"metadata": self.metadata_view(), "data": {"url": self.source_url}}
+
+    def get_lineage_graph(self, visited=None) -> dict:
+        if visited is None:
+            visited = set()
+        
+        if self.id in visited:
+            return {"id": self.id, "name": self.name, "type": self.type, "circular": True}
+
+        visited.add(self.id)
+
+        return {
+            "id": self.id,
+            "name": self.name,
+            "type": self.type,
+            "url": self.source_url,
+            "parents": [parent.get_lineage_graph(visited.copy()) for parent in self.parents.all()],
+        }
+
+
