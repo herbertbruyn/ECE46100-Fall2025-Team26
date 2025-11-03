@@ -2,6 +2,11 @@
 Team project repository for ECE30861 Software Engineering
 
 ## Team Members
+- Josh LeBlanc
+- Herbert de Bruyn
+- James Neff
+- Dylan Brannick
+### old team
 - Mohamed Zaitoun
 - Sean Chen
 - Tegan Johnson
