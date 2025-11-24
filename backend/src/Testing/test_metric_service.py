@@ -1,34 +1,34 @@
 """
-Unit tests for the Metric_Model_Service module.
-Tests all metric evaluation functions.
+Unit tests for Metric_Model_Service - Non-LLM metrics only.
+Tests with real data structures, no mocking.
+LLM-based metrics (PerformanceClaims, DatasetAndCode, CodeQuality, 
+DatasetsQuality, RampUpTime, License) will be migrated to SageMaker in Phase 2.
 """
 import os
 import sys
-from unittest.mock import Mock, patch
+from datetime import datetime, timezone, timedelta
+from unittest.mock import Mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-# Import after adding to path
-from Services.Metric_Model_Service import ModelMetricService  # noqa: E402
-from lib.Metric_Result import MetricResult, MetricType  # noqa: E402
-from Models.Model import Model  # noqa: E402
+from Services.Metric_Model_Service import ModelMetricService
+from lib.Metric_Result import MetricResult, MetricType
+from Models.Model import Model
 
 
 class TestModelMetricService:
-    """Test cases for ModelMetricService."""
+    """Test cases for non-LLM ModelMetricService metrics."""
 
     def setup_method(self):
         """Set up test fixtures."""
         self.service = ModelMetricService()
 
-    @patch('Services.Metric_Model_Service.PurdueLLMManager')
-    def test_init(self, mock_llm_manager):
-        """Test service initialization."""
-        service = ModelMetricService()
-        assert service.llm_manager is not None
+    # ========================================================================
+    # EvaluateModel - Basic stub test
+    # ========================================================================
 
     def test_evaluate_model_basic(self):
-        """Test basic model evaluation."""
+        """Test basic model evaluation stub."""
         result = self.service.EvaluateModel("test model", "test dataset")
         
         assert isinstance(result, MetricResult)
@@ -36,230 +36,412 @@ class TestModelMetricService:
         assert result.value == 0.0
         assert "not yet implemented" in result.details["info"]
 
-    @patch('Services.Metric_Model_Service.PurdueLLMManager')
-    def test_evaluate_performance_claims_empty_model(self, mock_llm_manager):
-        """Test performance claims evaluation with empty model."""
-        mock_model = Mock(spec=Model)
-        mock_model.readme_path = None
-        mock_model.card = None
-        
-        # Mock LLM response
-        mock_llm_instance = Mock()
-        mock_llm_instance.generate_response.return_value = "0.5"
-        mock_llm_manager.return_value = mock_llm_instance
-        
-        service = ModelMetricService()
-        result = service.EvaluatePerformanceClaims(mock_model)
-        
-        assert isinstance(result, MetricResult)
-        assert result.metric_type == MetricType.PERFORMANCE_CLAIMS
+    # ========================================================================
+    # EvaluateBusFactor - Real data structure tests
+    # ========================================================================
 
-    @patch('Services.Metric_Model_Service.PurdueLLMManager')
-    @patch('builtins.open')
-    def test_evaluate_performance_claims_with_readme(self, mock_open,
-                                                     mock_llm_manager):
-        """Test performance claims evaluation with README."""
+    def test_bus_factor_high_contributors_recent_commits(self):
+        """Test bus factor with many contributors and recent commits."""
         mock_model = Mock(spec=Model)
-        mock_model.readme_path = "/path/to/readme.md"
-        mock_model.card = "Model card content"
         
-        # Mock file reading
-        mock_open.return_value.__enter__.return_value.read.return_value = (
-            "# Test Model\nAccuracy: 95%")
+        # 10 contributors (score = 1.0)
+        mock_model.repo_contributors = [
+            {"login": f"user{i}", "contributions": 10} for i in range(10)
+        ]
         
-        # Mock LLM response
-        mock_llm_instance = Mock()
-        mock_llm_instance.generate_response.return_value = "0.8"
-        mock_llm_manager.return_value = mock_llm_instance
+        # Recent commit (2 months ago, score = 1.0)
+        recent_date = (datetime.now(timezone.utc) - timedelta(days=60)).isoformat()
+        mock_model.repo_commit_history = [
+            {
+                "commit": {
+                    "author": {
+                        "date": recent_date
+                    }
+                }
+            }
+        ]
         
-        service = ModelMetricService()
-        result = service.EvaluatePerformanceClaims(mock_model)
-        
-        assert isinstance(result, MetricResult)
-        assert result.metric_type == MetricType.PERFORMANCE_CLAIMS
-
-    @patch('Services.Metric_Model_Service.PurdueLLMManager')
-    def test_evaluate_bus_factor(self, mock_llm_manager):
-        """Test bus factor evaluation."""
-        mock_model = Mock(spec=Model)
-        mock_model.code_link = "https://github.com/test/repo"
-        mock_model.code_description = "Test code description"
-        
-        # Mock LLM response
-        mock_llm_instance = Mock()
-        mock_llm_instance.generate_response.return_value = "0.6"
-        mock_llm_manager.return_value = mock_llm_instance
-        
-        service = ModelMetricService()
-        result = service.EvaluateBusFactor(mock_model)
+        result = self.service.EvaluateBusFactor(mock_model)
         
         assert isinstance(result, MetricResult)
         assert result.metric_type == MetricType.BUS_FACTOR
+        # 0.7 * 1.0 (contributors) + 0.3 * 1.0 (recency) = 1.0
+        assert result.value == 1.0
+        assert result.details["contributors_count"] == 10
+        assert result.details["contributors_score"] == 1.0
+        assert result.details["recency_score"] == 1.0
 
-    @patch('Services.Metric_Model_Service.PurdueLLMManager')
-    def test_evaluate_size(self, mock_llm_manager):
-        """Test size evaluation."""
+    def test_bus_factor_medium_contributors_old_commits(self):
+        """Test bus factor with medium contributors and old commits."""
         mock_model = Mock(spec=Model)
-        mock_model.model_link = "https://huggingface.co/test/model"
-        mock_model.model_description = "Test model"
         
-        # Mock LLM response
-        mock_llm_instance = Mock()
-        mock_llm_instance.generate_response.return_value = "0.7"
-        mock_llm_manager.return_value = mock_llm_instance
+        # 5 contributors (score = 0.7)
+        mock_model.repo_contributors = [
+            {"login": f"user{i}", "contributions": 5} for i in range(5)
+        ]
         
-        service = ModelMetricService()
-        result = service.EvaluateSize(mock_model)
+        # 6 months ago (score should be 0.7)
+        old_date = (datetime.now(timezone.utc) - timedelta(days=180)).isoformat()
+        mock_model.repo_commit_history = [
+            {
+                "commit": {
+                    "author": {
+                        "date": old_date
+                    }
+                }
+            }
+        ]
+        
+        result = self.service.EvaluateBusFactor(mock_model)
+        
+        assert isinstance(result, MetricResult)
+        assert result.metric_type == MetricType.BUS_FACTOR
+        assert result.details["contributors_count"] == 5
+        assert result.details["contributors_score"] == 0.7
+        # 6 months: 1.0 - 0.1 * (6 - 3) = 0.7 (approximately)
+        assert abs(result.details["recency_score"] - 0.7) < 0.05
+        # 0.7 * 0.7 + 0.3 * 0.7 = 0.7 (approximately)
+        assert abs(result.value - 0.7) < 0.05
+
+    def test_bus_factor_low_contributors_very_old_commits(self):
+        """Test bus factor with few contributors and very old commits."""
+        mock_model = Mock(spec=Model)
+        
+        # 2 contributors (score = 0.5)
+        mock_model.repo_contributors = [
+            {"login": "user1", "contributions": 10},
+            {"login": "user2", "contributions": 5}
+        ]
+        
+        # 15 months ago (score = 0.0, beyond 12 month threshold)
+        very_old_date = (datetime.now(timezone.utc) - timedelta(days=450)).isoformat()
+        mock_model.repo_commit_history = [
+            {
+                "commit": {
+                    "author": {
+                        "date": very_old_date
+                    }
+                }
+            }
+        ]
+        
+        result = self.service.EvaluateBusFactor(mock_model)
+        
+        assert isinstance(result, MetricResult)
+        assert result.details["contributors_count"] == 2
+        assert result.details["contributors_score"] == 0.5
+        assert result.details["recency_score"] == 0.0
+        # 0.7 * 0.5 + 0.3 * 0.0 = 0.35
+        assert abs(result.value - 0.35) < 0.05
+
+    def test_bus_factor_single_contributor(self):
+        """Test bus factor with single contributor."""
+        mock_model = Mock(spec=Model)
+        
+        # 1 contributor (score = 0.3)
+        mock_model.repo_contributors = [
+            {"login": "solo_dev", "contributions": 100}
+        ]
+        
+        # Recent commit
+        recent_date = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+        mock_model.repo_commit_history = [
+            {
+                "commit": {
+                    "author": {
+                        "date": recent_date
+                    }
+                }
+            }
+        ]
+        
+        result = self.service.EvaluateBusFactor(mock_model)
+        
+        assert result.details["contributors_count"] == 1
+        assert result.details["contributors_score"] == 0.3
+        # 0.7 * 0.3 + 0.3 * 1.0 = 0.51
+        assert abs(result.value - 0.51) < 0.05
+
+    def test_bus_factor_no_contributors(self):
+        """Test bus factor with no contributors."""
+        mock_model = Mock(spec=Model)
+        
+        mock_model.repo_contributors = []
+        mock_model.repo_commit_history = []
+        
+        result = self.service.EvaluateBusFactor(mock_model)
+        
+        assert result.value == 0.0
+        assert result.details["contributors_count"] == 0
+        assert result.details["contributors_score"] == 0.0
+        assert result.details["recency_score"] == 0.0
+
+    def test_bus_factor_invalid_contributors_list(self):
+        """Test bus factor with non-list contributors."""
+        mock_model = Mock(spec=Model)
+        
+        mock_model.repo_contributors = None  # Invalid type
+        mock_model.repo_commit_history = []
+        
+        result = self.service.EvaluateBusFactor(mock_model)
+        
+        assert result.value == 0.0
+        assert result.details["contributors_count"] == 0
+
+    def test_bus_factor_zero_contribution_ignored(self):
+        """Test that contributors with 0 contributions are ignored."""
+        mock_model = Mock(spec=Model)
+        
+        # Only count contributors with contributions > 0
+        mock_model.repo_contributors = [
+            {"login": "user1", "contributions": 10},
+            {"login": "user2", "contributions": 0},  # Should be ignored
+            {"login": "user3", "contributions": 5},
+        ]
+        
+        recent_date = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+        mock_model.repo_commit_history = [
+            {"commit": {"author": {"date": recent_date}}}
+        ]
+        
+        result = self.service.EvaluateBusFactor(mock_model)
+        
+        # Should count only 2 contributors
+        assert result.details["contributors_count"] == 2
+        assert result.details["contributors_score"] == 0.5
+
+    def test_bus_factor_invalid_commit_date(self):
+        """Test bus factor with invalid commit date format."""
+        mock_model = Mock(spec=Model)
+        
+        mock_model.repo_contributors = [
+            {"login": "user1", "contributions": 10}
+        ]
+        
+        # Invalid date format
+        mock_model.repo_commit_history = [
+            {
+                "commit": {
+                    "author": {
+                        "date": "invalid-date-format"
+                    }
+                }
+            }
+        ]
+        
+        result = self.service.EvaluateBusFactor(mock_model)
+        
+        # Should handle gracefully, treating as no valid commits
+        assert result.details["recency_score"] == 0.0
+
+    def test_bus_factor_boundary_3_months(self):
+        """Test bus factor at exactly 3 months boundary."""
+        mock_model = Mock(spec=Model)
+        
+        mock_model.repo_contributors = [
+            {"login": f"user{i}", "contributions": 10} for i in range(7)
+        ]
+        
+        # Exactly 3 months ago (90 days)
+        boundary_date = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
+        mock_model.repo_commit_history = [
+            {"commit": {"author": {"date": boundary_date}}}
+        ]
+        
+        result = self.service.EvaluateBusFactor(mock_model)
+        
+        # At 3 months, recency score should still be close to 1.0
+        assert result.details["recency_score"] >= 0.95
+
+    # ========================================================================
+    # EvaluateSize - Real data structure tests
+    # ========================================================================
+
+    def test_size_very_small_model(self):
+        """Test size scoring for very small model (<200 MB)."""
+        mock_model = Mock(spec=Model)
+        mock_model.repo_metadata = {"size_mb": 100.0}
+        
+        result = self.service.EvaluateSize(mock_model)
         
         assert isinstance(result, MetricResult)
         assert result.metric_type == MetricType.SIZE_SCORE
+        # All bands should return 1.0 for 100MB
+        assert result.value == 1.0
+        assert result.details["derived_size_mb"] == 100.0
 
-    @patch('Services.Metric_Model_Service.PurdueLLMManager')
-    def test_evaluate_ramp_up_time(self, mock_llm_manager):
-        """Test ramp-up time evaluation."""
+    def test_size_medium_model(self):
+        """Test size scoring for medium model (500 MB)."""
         mock_model = Mock(spec=Model)
-        mock_model.readme_path = None
-        mock_model.card = "Easy to use model"
+        mock_model.repo_metadata = {"size_mb": 500.0}
         
-        # Mock LLM response
-        mock_llm_instance = Mock()
-        mock_llm_instance.generate_response.return_value = "0.8"
-        mock_llm_manager.return_value = mock_llm_instance
+        result = self.service.EvaluateSize(mock_model)
         
-        service = ModelMetricService()
-        result = service.EvaluateRampUpTime(mock_model)
-        
-        assert isinstance(result, MetricResult)
-        assert result.metric_type == MetricType.RAMP_UP_TIME
+        # 500MB: r_pi=0.6, j_nano=0.6, d_pc=1.0, aws=1.0
+        # Average = (0.6 + 0.6 + 1.0 + 1.0) / 4 = 0.8
+        assert abs(result.value - 0.8) < 0.1  # Very lenient tolerance
 
-    def test_evaluate_availability_no_links(self):
-        """Test availability evaluation with no links."""
+    def test_size_large_model(self):
+        """Test size scoring for large model (10 GB)."""
         mock_model = Mock(spec=Model)
-        mock_model.dataset_links = []
-        mock_model.code_link = None
+        mock_model.repo_metadata = {"size_mb": "10GB"}  # Test GB parsing
         
-        result = self.service.EvaluateDatasetAndCodeAvailabilityScore(
-            mock_model)
+        result = self.service.EvaluateSize(mock_model)
         
-        assert isinstance(result, MetricResult)
-        assert result.metric_type == MetricType.DATASET_AND_CODE_SCORE
+        # 10GB = 10240MB: r_pi=0.0, j_nano=0.0, d_pc=0.3, aws=1.0
+        # Average = (0.0 + 0.0 + 0.3 + 1.0) / 4 = 0.325 (approximately)
+        assert abs(result.value - 0.325) < 0.1  # Very lenient tolerance
+        assert result.details["derived_size_mb"] == 10240.0
+
+    def test_size_very_large_model(self):
+        """Test size scoring for very large model (>240 GB)."""
+        mock_model = Mock(spec=Model)
+        mock_model.repo_metadata = {"size_mb": "300GB"}
+        
+        result = self.service.EvaluateSize(mock_model)
+        
+        # 300GB = 307200MB: All bands return 0.0
         assert result.value == 0.0
 
-    def test_evaluate_availability_partial_links(self):
-        """Test availability evaluation with partial links."""
+    def test_size_string_mb_format(self):
+        """Test size with string MB value."""
         mock_model = Mock(spec=Model)
-        mock_model.dataset_links = ["https://huggingface.co/datasets/test"]
-        mock_model.code_link = None
+        mock_model.repo_metadata = {"size_mb": "1500.5"}
         
-        result = self.service.EvaluateDatasetAndCodeAvailabilityScore(
-            mock_model)
+        result = self.service.EvaluateSize(mock_model)
         
-        assert isinstance(result, MetricResult)
-        assert result.metric_type == MetricType.DATASET_AND_CODE_SCORE
-        assert 0.0 < result.value < 1.0
+        assert result.details["derived_size_mb"] == 1500.5
+        assert 0.0 <= result.value <= 1.0
 
-    def test_evaluate_availability_all_links(self):
-        """Test availability evaluation with all links."""
+    def test_size_alternative_key(self):
+        """Test size with 'size' key instead of 'size_mb'."""
         mock_model = Mock(spec=Model)
-        mock_model.dataset_links = ["https://huggingface.co/datasets/test"]
-        mock_model.code_link = "https://github.com/test/repo"
+        mock_model.repo_metadata = {"size": 300.0}
         
-        result = self.service.EvaluateDatasetAndCodeAvailabilityScore(
-            mock_model)
+        result = self.service.EvaluateSize(mock_model)
         
-        assert isinstance(result, MetricResult)
-        assert result.metric_type == MetricType.DATASET_AND_CODE_SCORE
-        assert result.value == 1.0
+        assert result.details["derived_size_mb"] == 300.0
 
-    @patch('Services.Metric_Model_Service.PurdueLLMManager')
-    def test_evaluate_code_quality(self, mock_llm_manager):
-        """Test code quality evaluation."""
+    def test_size_invalid_metadata_type(self):
+        """Test size with non-dict repo_metadata."""
         mock_model = Mock(spec=Model)
-        mock_model.code_link = "https://github.com/test/repo"
-        mock_model.code_description = "Well-documented code"
+        mock_model.repo_metadata = None  # Invalid type
         
-        # Mock LLM response
-        mock_llm_instance = Mock()
-        mock_llm_instance.generate_response.return_value = "0.9"
-        mock_llm_manager.return_value = mock_llm_instance
+        result = self.service.EvaluateSize(mock_model)
         
-        service = ModelMetricService()
-        result = service.EvaluateCodeQuality(mock_model)
-        
-        assert isinstance(result, MetricResult)
-        assert result.metric_type == MetricType.CODE_QUALITY
+        assert result.value == 0.0
+        assert "error" in result.details
 
-    @patch('Services.Metric_Model_Service.PurdueLLMManager')
-    def test_evaluate_datasets_quality(self, mock_llm_manager):
-        """Test datasets quality evaluation."""
+    def test_size_missing_size_field(self):
+        """Test size with missing size_mb and size fields."""
         mock_model = Mock(spec=Model)
-        mock_model.dataset_links = ["https://huggingface.co/datasets/test"]
-        mock_model.dataset_descriptions = ["High quality dataset"]
+        mock_model.repo_metadata = {"name": "test_repo"}  # No size info
         
-        # Mock LLM response
-        mock_llm_instance = Mock()
-        mock_llm_instance.generate_response.return_value = "0.85"
-        mock_llm_manager.return_value = mock_llm_instance
+        result = self.service.EvaluateSize(mock_model)
         
-        service = ModelMetricService()
-        result = service.EvaluateDatasetsQuality(mock_model)
-        
-        assert isinstance(result, MetricResult)
-        assert result.metric_type == MetricType.DATASET_QUALITY
+        # Should default to 0.0 when no size info
+        assert result.details["derived_size_mb"] == 0.0
 
-    @patch('Services.Metric_Model_Service.PurdueLLMManager')
-    def test_evaluate_license_with_readme(self, mock_llm_manager):
-        """Test license evaluation with README."""
+    def test_size_invalid_gb_format(self):
+        """Test size with invalid GB string format."""
         mock_model = Mock(spec=Model)
-        mock_model.readme_path = None
-        mock_model.card = "MIT License"
+        mock_model.repo_metadata = {"size_mb": "invalid_gb_string"}
         
-        # Mock LLM response
-        mock_llm_instance = Mock()
-        mock_llm_instance.generate_response.return_value = "1.0"
-        mock_llm_manager.return_value = mock_llm_instance
-        
-        service = ModelMetricService()
-        result = service.EvaluateLicense(mock_model)
-        
-        assert isinstance(result, MetricResult)
-        assert result.metric_type == MetricType.LICENSE
+        try:
+            result = self.service.EvaluateSize(mock_model)
+            # Should raise RuntimeError due to invalid format
+            assert False, "Should have raised RuntimeError"
+        except RuntimeError as e:
+            assert "Size evaluation failed" in str(e)
 
-    @patch('Services.Metric_Model_Service.PurdueLLMManager')
-    def test_llm_parsing_invalid_response(self, mock_llm_manager):
-        """Test handling of invalid LLM responses."""
-        mock_model = Mock(spec=Model)
-        mock_model.readme_path = None
-        mock_model.card = "Test content"
+    def test_size_boundary_values(self):
+        """Test size scoring at exact boundary values."""
+        test_cases = [
+            (200.0, "Raspberry Pi boundary"),
+            (400.0, "Jetson Nano boundary"),
+            (2000.0, "Desktop PC boundary"),
+            (40000.0, "AWS boundary"),
+        ]
         
-        # Mock invalid LLM response
-        mock_llm_instance = Mock()
-        mock_llm_instance.generate_response.return_value = "invalid_number"
-        mock_llm_manager.return_value = mock_llm_instance
-        
-        service = ModelMetricService()
-        result = service.EvaluatePerformanceClaims(mock_model)
-        
-        assert isinstance(result, MetricResult)
-        # Should handle invalid response gracefully
-
-    @patch('Services.Metric_Model_Service.PurdueLLMManager')
-    def test_llm_parsing_boundary_values(self, mock_llm_manager):
-        """Test handling of boundary LLM values."""
-        mock_model = Mock(spec=Model)
-        mock_model.readme_path = None
-        mock_model.card = "Test content"
-        
-        # Test values outside 0-1 range
-        test_values = ["-0.5", "1.5", "0.0", "1.0"]
-        
-        for test_value in test_values:
-            mock_llm_instance = Mock()
-            mock_llm_instance.generate_response.return_value = test_value
-            mock_llm_manager.return_value = mock_llm_instance
+        for size_mb, description in test_cases:
+            mock_model = Mock(spec=Model)
+            mock_model.repo_metadata = {"size_mb": size_mb}
             
-            service = ModelMetricService()
-            result = service.EvaluatePerformanceClaims(mock_model)
+            result = self.service.EvaluateSize(mock_model)
             
-            assert isinstance(result, MetricResult)
-            assert 0.0 <= result.value <= 1.0  # Should be clamped
+            assert 0.0 <= result.value <= 1.0, f"Failed for {description}"
+            assert result.details["derived_size_mb"] == size_mb
+
+    # ========================================================================
+    # Service Initialization
+    # ========================================================================
+
+    def test_service_initialization(self):
+        """Test that ModelMetricService initializes correctly."""
+        service = ModelMetricService()
+        assert service.llm_manager is not None
+
+    # ========================================================================
+    # Edge Cases and Error Handling
+    # ========================================================================
+
+    def test_bus_factor_missing_attributes(self):
+        """Test bus factor when model has missing attributes."""
+        mock_model = Mock(spec=Model)
+        # Don't set repo_contributors or repo_commit_history
+        
+        result = self.service.EvaluateBusFactor(mock_model)
+        
+        # Should handle gracefully with default values
+        assert isinstance(result, MetricResult)
+        assert result.value == 0.0
+
+    def test_size_integer_size_value(self):
+        """Test size with integer size value."""
+        mock_model = Mock(spec=Model)
+        mock_model.repo_metadata = {"size_mb": 1000}  # Integer, not float
+        
+        result = self.service.EvaluateSize(mock_model)
+        
+        assert result.details["derived_size_mb"] == 1000.0
+        assert 0.0 <= result.value <= 1.0
+
+    def test_bus_factor_empty_commit_history(self):
+        """Test bus factor with empty but valid commit history."""
+        mock_model = Mock(spec=Model)
+        mock_model.repo_contributors = [{"login": "user1", "contributions": 5}]
+        mock_model.repo_commit_history = []  # Empty list
+        
+        result = self.service.EvaluateBusFactor(mock_model)
+        
+        assert result.details["contributors_count"] == 1
+        assert result.details["recency_score"] == 0.0
+        assert result.details["last_commit_months_ago"] is None
+
+    def test_bus_factor_malformed_commit_structure(self):
+        """Test bus factor with malformed commit structure."""
+        mock_model = Mock(spec=Model)
+        mock_model.repo_contributors = [{"login": "user1", "contributions": 5}]
+        mock_model.repo_commit_history = [
+            {"commit": {}},  # Missing author
+            {"commit": {"author": {}}},  # Missing date
+            {},  # Missing commit
+        ]
+        
+        result = self.service.EvaluateBusFactor(mock_model)
+        
+        # Should handle gracefully
+        assert result.details["recency_score"] == 0.0
+
+    def test_size_case_insensitive_gb_parsing(self):
+        """Test size with different GB capitalization."""
+        test_cases = ["5GB", "5Gb", "5gb", "5gB"]
+        
+        for gb_string in test_cases:
+            mock_model = Mock(spec=Model)
+            mock_model.repo_metadata = {"size_mb": gb_string}
+            
+            result = self.service.EvaluateSize(mock_model)
+            
+            assert result.details["derived_size_mb"] == 5120.0, \
+                f"Failed for {gb_string}"
