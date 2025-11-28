@@ -52,6 +52,7 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           source: "./backend/deploy.sh"
           target: "/home/ec2-user/"
+          strip-components: 1
 
       - name: Run deploy script over SSH
         uses: appleboy/ssh-action@v1.2.0
