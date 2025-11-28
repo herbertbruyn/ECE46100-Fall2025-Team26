@@ -15,4 +15,4 @@ docker rm backend || true
 docker pull $REPO
 
 # Run new container
-docker run --rm -d --name backend -p 8000:8000 -e DJANGO_SECRET_KEY=$DJANGO_SECRET_KEY -e ALLOWED_HOSTS=$ALLOWED_HOSTS $REPO
+docker run -d --name backend -p 8000:8000 -e DJANGO_SECRET_KEY=$DJANGO_SECRET_KEY -e ALLOWED_HOSTS=$ALLOWED_HOSTS $REPO
