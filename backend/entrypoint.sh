@@ -5,7 +5,7 @@ set -e
 
 # Run database migrations
 echo "Applying database migrations..."
-python manage.py migrate
+python web/registry/manage.py migrate
 
 # Start the server (this executes the CMD passed from the Dockerfile)
 echo "Starting server..."
