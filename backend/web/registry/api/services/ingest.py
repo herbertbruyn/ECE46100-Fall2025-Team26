@@ -37,18 +37,20 @@ from api.models import (
 from api.storage import get_storage
 
 # Import metric service from backend/src
-BASE_SRC = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "src"))
+BASE_SRC = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "src")
+)
 if BASE_SRC not in sys.path:
     sys.path.insert(0, BASE_SRC)
 
 try:
     from Services.Metric_Model_Service import ModelMetricService
-    from Models.Model import Model
+    from Models.Manager_Models_Model import ModelManager
     from lib.HuggingFace_API_Manager import HuggingFaceAPIManager
 except ImportError as e:
     logging.error(f"Failed to import metric service: {e}")
     ModelMetricService = None
-    Model = None
+    ModelManager = None
     HuggingFaceAPIManager = None
 
 logger = logging.getLogger(__name__)
@@ -71,9 +73,9 @@ class IngestService:
         self.metric_service = ModelMetricService() if ModelMetricService else None
         self.hf_manager = HuggingFaceAPIManager() if HuggingFaceAPIManager else None
     
-    def ingest_artifact(self, source_url: str, artifact_type: str, revision: str = "main") -> Tuple[int, Dict]:
+    def ingest_artifact(self, source_url: str, artifact_type: str, revision: str = "main", uploaded_by=None) -> Tuple[int, Dict]:
         """
-        Main ingest pipeline - Option 2 approach
+        Main ingest pipeline
         
         Flow:
         1. Create artifact record with status="pending"
@@ -98,25 +100,34 @@ class IngestService:
             repo_id = self._extract_repo_id(source_url)
             name = repo_id.split('/')[-1]
             
-            # Check for duplicates
-            existing = Artifact.objects.filter(
+            # Only block if there's a completed artifact
+            existing_completed = Artifact.objects.filter(
                 source_url=source_url,
-                type=artifact_type
+                type=artifact_type,
+                status="completed"
             ).first()
-            
-            if existing:
+
+            if existing_completed:
                 return 409, {
                     "status": "error",
                     "error": "Artifact exists already",
-                    "existing_id": existing.id
+                    "existing_id": existing_completed.id
                 }
+
+            # Delete any failed attempts to allow retry
+            Artifact.objects.filter(
+                source_url=source_url,
+                type=artifact_type,
+                status__in=["pending", "rating", "failed", "rejected"]
+            ).delete()
             
             # Create artifact with "pending" status
             artifact = Artifact.objects.create(
                 name=name,
                 type=artifact_type,
                 source_url=source_url,
-                status="pending"
+                status="pending",
+                uploaded_by=uploaded_by
             )
             logger.info(f"Created artifact {artifact.id} with status=pending")
             
@@ -368,7 +379,7 @@ class IngestService:
     
     def _create_model_object(self, local_path: str, source_url: str) -> Optional[Model]:
         """Create Model object from downloaded files"""
-        if not Model:
+        if not ModelManager:
             return None
         
         try:
@@ -379,10 +390,21 @@ class IngestService:
                     readme_path = potential_path
                     break
             
-            model = Model()
+            model = ModelManager()
             model.readme_path = readme_path
             model.source_url = source_url
             model.local_path = local_path
+
+            size_mb = sum(
+                os.path.getsize(os.path.join(dp, f))
+                for dp, dn, fnames in os.walk(local_path)
+                for f in fnames
+            ) / (1024 * 1024)
+
+            model.repo_metadata = {
+                'size_mb': round(size_mb, 2),
+                'size': f"{round(size_mb, 2)}"
+            }
             
             config_path = os.path.join(local_path, 'config.json')
             if os.path.exists(config_path):

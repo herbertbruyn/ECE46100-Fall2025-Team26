@@ -1,6 +1,6 @@
 # api/urls.py
 from django.urls import path, re_path
-from . import views
+from . import views, auth_views
 
 urlpatterns = [
     # Admin reset endpoint
@@ -10,7 +10,7 @@ urlpatterns = [
     path("health", views.health),
     
     # Auth (not implemented)
-    path("authenticate", views.authenticate),
+    path("authenticate", auth_views.authenticate),
     
     # Artifact operations
     path("artifact/byRegEx", views.artifact_by_regex),
