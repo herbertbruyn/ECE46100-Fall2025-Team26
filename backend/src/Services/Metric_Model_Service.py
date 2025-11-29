@@ -983,3 +983,203 @@ class ModelMetricService:
         except Exception as e:
             logging.error(f"Failed to evaluate license: {e}")
             raise RuntimeError("License evaluation failed") from e
+        
+    def EvaluateReproducibility(self, Data: Model) -> MetricResult:
+        """
+        Evaluate model reproducibility based on demonstration code.
+        
+        Scoring (per Phase 2 spec):
+        - 0.0: No demonstration code or doesn't run
+        - 0.5: Runs with debugging/modifications
+        - 1.0: Runs with no changes
+        
+        Args:
+            Data: Model instance with card and readme
+            
+        Returns:
+            MetricResult with reproducibility score
+        """
+        def _extract_code_blocks(model: Model) -> str:
+            """Extract Python code blocks from README and model card."""
+            # Get README content
+            readme_text = ""
+            if hasattr(model, 'readme_path') and model.readme_path:
+                try:
+                    with open(model.readme_path, 'r', encoding='utf-8') as f:
+                        readme_text = f.read()
+                except Exception:
+                    readme_text = ""
+            
+            # Get card content
+            card_text = ""
+            if hasattr(model, 'card') and model.card:
+                card_text = str(model.card)
+            
+            # Combine
+            full_text = readme_text + "\n\n" + card_text
+            
+            # Extract Python code blocks (markdown format)
+            import re
+            python_pattern = r'```(?:python|py)\n(.*?)```'
+            python_blocks = re.findall(
+                python_pattern, 
+                full_text, 
+                re.DOTALL | re.IGNORECASE
+            )
+            
+            # Also check generic code blocks that look like Python
+            generic_pattern = r'```\n(.*?)```'
+            generic_blocks = re.findall(generic_pattern, full_text, re.DOTALL)
+            
+            # Filter for Python-like code
+            for block in generic_blocks:
+                if any(kw in block for kw in ['import', 'from', 'def', 'class']):
+                    if block not in python_blocks:
+                        python_blocks.append(block)
+            
+            return '\n\n'.join(python_blocks) if python_blocks else ""
+        
+        def _analyze_code_quality(code: str) -> dict:
+            """Analyze the quality and runnability of demonstration code."""
+            import re
+            
+            analysis = {
+                "has_code": bool(code.strip()),
+                "has_imports": False,
+                "has_model_loading": False,
+                "has_execution": False,
+                "syntax_valid": False,
+                "is_complete": False,
+                "code_length": len(code.strip().split('\n')) if code else 0
+            }
+            
+            if not code:
+                return analysis
+            
+            # Check for imports
+            analysis["has_imports"] = bool(
+                re.search(r'^\s*(?:import|from)\s+\w+', code, re.MULTILINE)
+            )
+            
+            # Check for model loading patterns
+            loading_patterns = [
+                r'\.from_pretrained\(',
+                r'load_model\(',
+                r'AutoModel\.',
+                r'AutoTokenizer\.',
+                r'pipeline\(',
+                r'torch\.load\(',
+                r'tf\.keras\.models\.load_model\(',
+                r'\.load\(',
+            ]
+            
+            for pattern in loading_patterns:
+                if re.search(pattern, code, re.IGNORECASE):
+                    analysis["has_model_loading"] = True
+                    break
+            
+            # Check for execution (code beyond imports and definitions)
+            lines = code.split('\n')
+            has_exec = False
+            for line in lines:
+                stripped = line.strip()
+                if stripped and not stripped.startswith(('#', 'import', 'from', 'def', 'class')):
+                    has_exec = True
+                    break
+            analysis["has_execution"] = has_exec
+            
+            # Check syntax validity
+            try:
+                compile(code, '<string>', 'exec')
+                analysis["syntax_valid"] = True
+            except SyntaxError:
+                analysis["syntax_valid"] = False
+            
+            # Complete example: has imports, model loading, execution, valid syntax
+            analysis["is_complete"] = (
+                analysis["has_imports"] and
+                analysis["has_model_loading"] and
+                analysis["has_execution"] and
+                analysis["syntax_valid"]
+            )
+            
+            return analysis
+        
+        def _calculate_score(analysis: dict) -> float:
+            """
+            Calculate reproducibility score.
+            
+            Scoring logic:
+            - 1.0: Complete, runnable example (imports + loading + execution + valid syntax)
+            - 0.5: Partial code that needs debugging (has imports + valid syntax)
+            - 0.0: No code or code that won't run
+            """
+            if not analysis["has_code"]:
+                return 0.0
+            
+            # Score 1.0: Complete runnable example
+            if analysis["is_complete"]:
+                return 1.0
+            
+            # Score 0.5: Has potential but needs work
+            # Valid syntax + imports suggests it could run with debugging
+            if analysis["has_imports"] and analysis["syntax_valid"]:
+                return 0.5
+            
+            # Has imports but syntax errors (still needs debugging)
+            if analysis["has_imports"]:
+                return 0.5
+            
+            # Has some code but quality is poor
+            if analysis["has_code"]:
+                return 0.0
+            
+            return 0.0
+        
+        try:
+            # Extract demonstration code
+            code = _extract_code_blocks(Data)
+            
+            if not code:
+                return MetricResult(
+                    metric_type=MetricType.REPRODUCIBILITY,
+                    value=0.0,
+                    details={
+                        "reason": "No demonstration code found",
+                        "has_code": False
+                    },
+                    latency_ms=0,
+                    error=None
+                )
+            
+            # Analyze code quality
+            analysis = _analyze_code_quality(code)
+            
+            # Calculate score
+            score = _calculate_score(analysis)
+            
+            # Add explanation based on score
+            if score == 1.0:
+                analysis["explanation"] = "Complete runnable demo code found"
+            elif score == 0.5:
+                analysis["explanation"] = "Demo code found but may need debugging"
+            else:
+                analysis["explanation"] = "Demo code quality insufficient to run"
+            
+            return MetricResult(
+                metric_type=MetricType.REPRODUCIBILITY,
+                value=score,
+                details=analysis,
+                latency_ms=0,
+                error=None
+            )
+            
+        except Exception as e:
+            logging.error(f"Failed to evaluate reproducibility: {e}")
+            return MetricResult(
+                metric_type=MetricType.REPRODUCIBILITY,
+                value=0.0,
+                details={"error": str(e)},
+                latency_ms=0,
+                error=str(e)
+            )
