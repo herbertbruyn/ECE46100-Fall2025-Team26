@@ -13,3 +13,18 @@
 # apple
 .DS_Store
 __pycache__/
+
+# Additional ignores can be added below this line
+media/
+db.sqlite3
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Local env
+.env
+
+# Django migrations history (optional but recommended for student projects)
+api/migrations/*.py
+!api/migrations/__init__.py

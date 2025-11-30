@@ -23,7 +23,11 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY")
 if SECRET_KEY is None:
-    raise RuntimeError("DJANGO_SECRET_KEY is required in production")
+    if os.getenv("DJANGO_DEBUG", "1") == "1":  # dev fallback
+        SECRET_KEY = "dev-not-secret"
+    else:
+        raise RuntimeError("DJANGO_SECRET_KEY is required in production")
+
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv("DJANGO_DEBUG", "1") == "1"
 
@@ -103,6 +107,14 @@ else:
         }
     }
 
+# DEV defaults
+USE_S3 = bool(os.getenv("USE_S3", "false").lower() == "true")
+MEDIA_URL = "/media/"
+MEDIA_ROOT = BASE_DIR / "media"
+
+# PROD (set in env)
+AWS_STORAGE_BUCKET_NAME = os.getenv("S3_BUCKET", "")
+AWS_S3_REGION_NAME = os.getenv("AWS_REGION", "us-east-1")
 
 # Password validation
 # https://docs.djangoproject.com/en/5.1/ref/settings/#auth-password-validators

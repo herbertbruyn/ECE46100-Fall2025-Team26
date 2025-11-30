@@ -16,3 +16,6 @@ Django>=5.0
 djangorestframework>=3.15
 pytest-django>=4.9.0
 psycopg[binary]>=3.2
+
+# AWS
+boto3>=1.28.0
