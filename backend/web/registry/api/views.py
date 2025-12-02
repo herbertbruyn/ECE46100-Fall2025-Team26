@@ -1,6 +1,11 @@
 import os
 import re
+from statistics import linear_regression
 import sys
+import io
+import json
+import zipfile
+import logging
 from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
@@ -56,6 +61,42 @@ def derive_name(artifact_type: str, url: str) -> str:
     except Exception:
         pass
     return (url.rstrip("/").split("/")[-1] or "unnamed")[:255]
+
+
+def extract_parent_model(artifact):
+    """
+    Extract parent model from config.json in artifact's ZIP file
+    """
+
+    # Make sure artifact is stored
+    if not artifact.blob:
+        return None
+
+    try:
+        with artifact.blob.open("rb") as f:
+            zip_bytes = f.read()
+            zip_buffer = io.BytesIO(zip_bytes)
+            with zipfile.ZipFile(zip_buffer) as zf:
+                if 'config.json' not in zf.namelist():
+                    return None
+
+                with zf.open('config.json') as config_file:
+                    config = json.load(config_file)
+
+                    # Look for parent field
+                    for field in ['base_model_name_or_path', '_name_or_path', 'base_model']:
+                        if field in config:
+                            parent = config[field]
+                            if isinstance(parent, str) and parent:
+                                return parent
+                    return None
+
+
+
+    except Exception as e:
+        logging.warning(f"Could not extract parent model from artifact {artifact.id}: {e}")
+        return None
+
 
 ###################################### API Views ######################################
 @api_view(["DELETE"])
@@ -359,3 +400,79 @@ def artifact_cost(request, artifact_type: str, id: int):
                 "total_cost": round(cost_mb, 2)
             }
         }, status=200)
+
+@api_view(["GET"])
+@require_auth
+def artifact_lineage(request, id: int):
+    """
+    Get /artifact/model/{id}/lineage
+
+    Return lineage graph for a model
+
+    Error Codes:
+    - 200: Success
+    - 400: Lineage graph cannot be computed because the artifact metadata is missing or malformed
+    - 403: Authentication failed due to invalid or missing Authentication Token
+    - 404: Artifact does not exist
+
+    """
+
+    # 404
+    obj = get_object_or_404(Artifact, pk=id, type="model")
+    
+
+    nodes = []
+    edges = []
+
+    # Add the model as the node
+    nodes.append({
+        "artifact_id": str(obj.id),
+        "name": obj.name,
+        "source": "config_json"
+    })
+
+    # 400
+    if not obj.blob:
+        return Response(
+            {"detail": "The lineage graph cannot be computed because the artifact metadata is missing or malformed."},
+            status=400
+        )
+    # Try to extract parent model
+    try:
+        parent_model_id = extract_parent_model(obj)
+    except Exception as e:
+        logging.error(f"Failed to extract parent model for artifact {id}: {e}")
+        return Response(
+            {"detail": f"The lineage graph cannot be computed because the artifact metadata is missing or malformed."},
+            status=400
+        )
+
+    if parent_model_id:
+        parent_name = parent_model_id.split('/')[-1] if '/' in parent_model_id else parent_model_id
+
+        # Search for parent in registry
+        parent_artifact = Artifact.objects.filter(
+            type="model",
+            name__icontains=parent_name,
+            status="completed"
+        ).exclude(id=obj.id).first()
+
+        if parent_artifact:
+            nodes.append({
+                "artifact_id": str(parent_artifact.id),
+                "name": parent_artifact.name,
+                "source": "config_json"
+            })
+            edges.append({
+                "from_node_artifact_id": str(parent_artifact.id),
+                "to_node_artifact_id": str(obj.id),
+                "relationship": "base_model"
+            })
+
+    return Response({
+        "nodes": nodes,
+        "edges": edges
+    }, status=200)
+
+
+

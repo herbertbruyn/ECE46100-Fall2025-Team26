@@ -34,4 +34,7 @@ urlpatterns = [
         r"^artifact/(?P<artifact_type>(model|dataset|code))/(?P<id>\d+)/cost$",
         views.artifact_cost
     ),
+
+    # Lineage endpoint
+    path("artifact/model/<int:id>/lineage", views.artifact_lineage)
 ]
