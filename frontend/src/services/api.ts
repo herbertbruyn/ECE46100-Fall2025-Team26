@@ -1,16 +1,19 @@
 import axios, { AxiosInstance, InternalAxiosRequestConfig } from 'axios';
-import type { 
-  Artifact, 
-  UploadResponse, 
-  SearchQuery, 
-  RegexSearchQuery, 
-  CostResult, 
+import type {
+  Artifact,
+  ArtifactType,
+  ModelRating,
+  UploadResponse,
+  SearchQuery,
+  RegexSearchQuery,
+  CostResult,
   HealthStatus,
-  AuthToken 
+  AuthToken,
 } from '../types';
 import type { ActivityLog } from '../types/activity';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const API_URL =
+  (import.meta as any).env?.VITE_API_URL || 'http://localhost:8000';
 
 class ApiService {
   private api: AxiosInstance;
@@ -33,14 +36,25 @@ class ApiService {
   }
 
   async login(username: string, password: string, is_admin: boolean = false): Promise<AuthToken> {
-    const { data } = await this.api.post<AuthToken>('/authenticate', {
-      username,
-      password,
-      is_admin,
+    // Backend expects this format (see auth_views.py)
+    const { data } = await this.api.put<string>('/authenticate', {
+      user: {
+        name: username,
+        is_admin: is_admin,
+      },
+      secret: {
+        password: password,
+      },
     });
-    localStorage.setItem('token', data.token);
-    localStorage.setItem('user', JSON.stringify(data.user));
-    return data;
+
+    // Backend returns just the token string
+    const token = data;
+    const user = { name: username, is_admin: is_admin };
+
+    localStorage.setItem('token', token);
+    localStorage.setItem('user', JSON.stringify(user));
+
+    return { token, user };
   }
 
   logout() {
@@ -58,16 +72,17 @@ class ApiService {
     return data;
   }
 
-  async getArtifact(id: number): Promise<Artifact> {
-    const { data } = await this.api.get<Artifact>(`/artifact/${id}`);
+  async getArtifact(type: ArtifactType, id: number): Promise<Artifact> {
+    const { data } = await this.api.get<Artifact>(`/artifacts/${type}/${id}`);
     return data;
   }
 
-  async uploadArtifact(url: string, type: string): Promise<UploadResponse> {
-    const { data } = await this.api.post<UploadResponse>('/artifact', {
-      url,
-      type,
-    });
+  async uploadArtifact(type: ArtifactType, url: string, revision?: string): Promise<UploadResponse> {
+    const payload: any = { url };
+    if (revision) {
+      payload.revision = revision;
+    }
+    const { data } = await this.api.post<UploadResponse>(`/artifact/${type}`, payload);
     return data;
   }
 
@@ -76,8 +91,8 @@ class ApiService {
     return data;
   }
 
-  async deleteArtifact(id: number): Promise<void> {
-    await this.api.delete(`/artifact/${id}`);
+  async deleteArtifact(type: ArtifactType, id: number): Promise<void> {
+    await this.api.delete(`/artifacts/${type}/${id}`);
   }
 
   async downloadArtifact(id: number): Promise<Blob> {
@@ -102,14 +117,33 @@ class ApiService {
     return data;
   }
 
-  async calculateCost(): Promise<CostResult> {
-    const { data } = await this.api.get<CostResult>('/cost');
+    async resetRegistry(): Promise<{ message: string }> {
+    // alias used by AdminPage
+    return this.resetArtifacts();
+  }
+
+  async calculateCost(type: ArtifactType, id: number, includeDependencies: boolean = true): Promise<CostResult> {
+    const { data } = await this.api.get<CostResult>(`/artifact/${type}/${id}/cost?dependency=${includeDependencies}`);
     return data;
+  }
+
+  async getModelRating(id: number): Promise<ModelRating> {
+    const { data } = await this.api.get<ModelRating>(`/artifact/model/${id}/rate`);
+    return data;
+  }
+
+  getDownloadUrl(artifact: Artifact): string | null {
+    if (!artifact.blob) return null;
+    // The blob field contains the relative URL from Django
+    return `${API_URL}${artifact.blob}`;
   }
 
   async checkHealth(): Promise<HealthStatus> {
     const { data } = await this.api.get<HealthStatus>('/health');
     return data;
+  }
+    async getHealth(): Promise<HealthStatus> {
+    return this.checkHealth();
   }
 
   async getActivityLog(filters?: {

@@ -61,21 +61,18 @@ export default function UploadPage() {
           </label>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.75rem' }}>
             <TypeCard
-              type="model"
               icon={<Package size={24} />}
               label="Model"
               selected={type === 'model'}
               onClick={() => setType('model')}
             />
             <TypeCard
-              type="dataset"
               icon={<Database size={24} />}
               label="Dataset"
               selected={type === 'dataset'}
               onClick={() => setType('dataset')}
             />
             <TypeCard
-              type="code"
               icon={<CodeIcon size={24} />}
               label="Code"
               selected={type === 'code'}
@@ -173,13 +170,11 @@ export default function UploadPage() {
 }
 
 function TypeCard({
-  type,
   icon,
   label,
   selected,
   onClick
 }: {
-  type: string;
   icon: React.ReactNode;
   label: string;
   selected: boolean;

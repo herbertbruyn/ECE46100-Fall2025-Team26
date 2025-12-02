@@ -1,6 +1,10 @@
-export function LoadingSpinner() {
+interface LoadingSpinnerProps {
+  text?: string;
+}
+
+export function LoadingSpinner({ text }: LoadingSpinnerProps = {}) {
   return (
-    <div style={{ display: 'flex', justifyContent: 'center', padding: '2rem' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '2rem' }}>
       <div
         style={{
           width: '40px',
@@ -11,6 +15,11 @@ export function LoadingSpinner() {
           animation: 'spin 1s linear infinite',
         }}
       />
+      {text && (
+        <p style={{ marginTop: '1rem', color: 'var(--text-muted)', fontSize: '0.875rem' }}>
+          {text}
+        </p>
+      )}
     </div>
   );
 }

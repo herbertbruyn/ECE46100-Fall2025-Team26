@@ -3,7 +3,7 @@ import { useAuth } from './contexts/AuthContext';
 import { Header } from './components/Header';
 
 import { LoginPage } from './pages/LoginPage';
-import BrowsePage from './pages/BrowsePage';
+import { BrowsePage } from './pages/BrowsePage';
 import UploadPage from './pages/UploadPage';
 import { SearchPage } from './pages/SearchPage';
 import ArtifactDetailPage from './pages/ArtifactDetailPage';

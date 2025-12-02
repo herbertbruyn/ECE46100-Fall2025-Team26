@@ -2,40 +2,46 @@ import { formatScore, formatLatency } from '../utils/format';
 import type { ModelRating } from '../types';
 
 interface MetricsDisplayProps {
-  metrics: ModelRating;
+  metrics?: ModelRating;
+  rating?: ModelRating;
 }
 
-export function MetricsDisplay({ metrics }: MetricsDisplayProps) {
+export function MetricsDisplay({ metrics, rating }: MetricsDisplayProps) {
+  // Support both 'metrics' and 'rating' props for backward compatibility
+  const data = metrics || rating;
+  if (!data) {
+    return <div>No metrics available</div>;
+  }
   const metricGroups = [
     {
       title: 'Overall Scores',
       metrics: [
-        { label: 'Net Score', value: metrics.net_score, latency: metrics.net_score_latency },
-        { label: 'Size Score', value: metrics.size_score, latency: metrics.size_score_latency },
+        { label: 'Net Score', value: data.net_score, latency: data.net_score_latency },
+        { label: 'Size Score', value: data.size_score, latency: data.size_score_latency },
       ],
     },
     {
       title: 'Code & Dataset Quality',
       metrics: [
-        { label: 'Dataset & Code Score', value: metrics.dataset_and_code_score, latency: metrics.dataset_and_code_score_latency },
-        { label: 'Dataset Quality', value: metrics.dataset_quality, latency: metrics.dataset_quality_latency },
-        { label: 'Code Quality', value: metrics.code_quality, latency: metrics.code_quality_latency },
+        { label: 'Dataset & Code Score', value: data.dataset_and_code_score, latency: data.dataset_and_code_score_latency },
+        { label: 'Dataset Quality', value: data.dataset_quality, latency: data.dataset_quality_latency },
+        { label: 'Code Quality', value: data.code_quality, latency: data.code_quality_latency },
       ],
     },
     {
       title: 'Project Health',
       metrics: [
-        { label: 'Ramp Up Time', value: metrics.ramp_up_time, latency: metrics.ramp_up_time_latency },
-        { label: 'Bus Factor', value: metrics.bus_factor, latency: metrics.bus_factor_latency },
-        { label: 'Reproducibility', value: metrics.reproducibility, latency: metrics.reproducibility_latency },
-        { label: 'Reviewedness', value: metrics.reviewedness, latency: metrics.reviewedness_latency },
+        { label: 'Ramp Up Time', value: data.ramp_up_time, latency: data.ramp_up_time_latency },
+        { label: 'Bus Factor', value: data.bus_factor, latency: data.bus_factor_latency },
+        { label: 'Reproducibility', value: data.reproducibility, latency: data.reproducibility_latency },
+        { label: 'Reviewedness', value: data.reviewedness, latency: data.reviewedness_latency },
       ],
     },
     {
       title: 'Compliance',
       metrics: [
-        { label: 'License', value: metrics.license, latency: metrics.license_latency },
-        { label: 'Performance Claims', value: metrics.performance_claims, latency: metrics.performance_claims_latency },
+        { label: 'License', value: data.license, latency: data.license_latency },
+        { label: 'Performance Claims', value: data.performance_claims, latency: data.performance_claims_latency },
       ],
     },
   ];
@@ -52,7 +58,7 @@ export function MetricsDisplay({ metrics }: MetricsDisplayProps) {
           Total Rating Time
         </div>
         <div style={{ fontSize: '1.5rem', fontWeight: 600, color: 'var(--primary)' }}>
-          {formatLatency(metrics.total_rating_time)}
+          {formatLatency(data.total_rating_time)}
         </div>
       </div>
 
