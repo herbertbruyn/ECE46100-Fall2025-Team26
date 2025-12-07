@@ -35,7 +35,9 @@ ALLOWED_HOSTS = []
 hosts = os.getenv("ALLOWED_HOSTS")
 if not hosts:
     raise RuntimeError("ALLOWED_HOSTS is required in production")
-ALLOWED_HOSTS.append(hosts.split(" "))
+hosts = hosts.split(",")
+for h in hosts:
+    ALLOWED_HOSTS.append(h)
 
 
 # Application definition
