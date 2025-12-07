@@ -32,7 +32,10 @@ if SECRET_KEY is None:
 DEBUG = os.getenv("DJANGO_DEBUG", "1") == "1"
 
 ALLOWED_HOSTS = []
-ALLOWED_HOSTS.append(os.getenv("ALLOWED_HOSTS"))
+hosts = os.getenv("ALLOWED_HOSTS")
+if not hosts:
+    raise RuntimeError("ALLOWED_HOSTS is required in production")
+ALLOWED_HOSTS.append(hosts.split(" "))
 
 
 # Application definition
