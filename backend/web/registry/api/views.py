@@ -365,7 +365,7 @@ def tracks(request):
     """GET /tracks - Return planned tracks"""
     try:
         return Response({
-            "plannedTracks": ["Other Security track"]
+            "plannedTracks": ["Access control track"]
         }, status=200)
     except Exception:
         return Response({"detail": "System error"}, status=500)
