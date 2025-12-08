@@ -19,7 +19,7 @@ import hashlib
 import logging
 import re
 import time
-from typing import Dict, Tuple, Optional
+from typing import Dict, Tuple, Optional, List
 from django.db import transaction
 from django.utils import timezone
 
@@ -301,6 +301,27 @@ class IngestService:
             logger.warning(f"Failed to extract dependencies: {e}")
             return None, None
     
+    def _extract_parent_model_from_local_config(self, local_path: str) -> Optional[str]:
+        """Extract parent model from local config.json"""
+        config_path = os.path.join(local_path, 'config.json')
+        if not os.path.exists(config_path):
+            return None
+
+        try:
+            with open(config_path, 'r') as f:
+                config = json.load(f)
+
+                for field in ['base_model_name_or_path', '_name_or_path', 'base_model']:
+                    if field in config:
+                        parent = config[field]
+                        if isinstance(parent, str) and parent:
+                            return parent
+                return None
+
+        except Exception as e:
+            logging.warning(f"Could not extract parent model from config.json: {e}")
+            return None
+    
     def _rate_artifact(self, local_path: str, source_url: str, name: str) -> Dict[str, float]:
         """
         Rate artifact using ModelMetricService
@@ -341,6 +362,8 @@ class IngestService:
             for metric in ["reproducibility", "reviewedness", "tree_score"]:
                 scores[metric] = 0.6
                 scores[f"{metric}_latency"] = 0.0
+
+        
             
             # Calculate net score as weighted average
             scores["net_score"] = self._calculate_net_score(scores)
@@ -354,6 +377,36 @@ class IngestService:
         except Exception as e:
             logger.error(f"Rating failed: {str(e)}", exc_info=True)
             return self._fallback_rating()
+
+    def _calculate_tree_score(self, local_path: str) -> float:
+        """
+        Calculate tree score: Average of net scores of parents in the registry
+        """
+
+        parent_model_ids = self._extract_parent_model_from_local_config(local_path)
+
+        if not parent_model_ids:
+            logger.info("No parent model found")
+            return 0.6 # What should 'default' be?
+
+        parent_scores = []
+
+        for parent_model_id in parent_model_ids:
+            parent_name = parent_model_id.split('/')[-1] if '/' in parent_model_id else parent_model_id
+
+            parent_artifact = Artifact.objects.filter(
+                type="model",
+                name__icontains=parent_name,
+                status="completed"
+            ).first()
+
+            if parent_artifact and hasattr(parent_artifact, 'rating'):
+                parent_scores.append(parent_artifact.rating.net_score)
+                    
+        if parent_scores:
+            return sum(parent_scores) / len(parent_scores)
+        else:
+            return 0.6
     
     def _calculate_net_score(self, scores: Dict[str, float]) -> float:
         """Calculate weighted net score from individual metrics"""
