@@ -1,6 +1,7 @@
 import os
 import re
 import sys
+import logging
 from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
@@ -43,6 +44,9 @@ gh = GitHubAPIManager(token=os.getenv("GITHUB_TOKEN")) if GitHubAPIManager else 
 # Initialize ingest service
 ingest_service = IngestService() if IngestService else None
 
+# Set up logging
+logger = logging.getLogger(__name__)
+
 ############################### Helper Functions ######################################
 def derive_name(artifact_type: str, url: str) -> str:
     """Derive artifact name from URL"""
@@ -65,6 +69,8 @@ def derive_name(artifact_type: str, url: str) -> str:
 def reset_registry(request):
     """DELETE /reset - Reset registry to default state"""
     # Perform reset
+    logger.info("Reset endpoint called")  # Add this
+
     try:
         with transaction.atomic():
             # Count before deletion
@@ -87,6 +93,8 @@ def reset_registry(request):
             Artifact.objects.all().delete()
             Dataset.objects.all().delete()
             Code.objects.all().delete()
+            
+            logger.info("Reset completed successfully")
         
         return Response({
             "detail": "Registry is reset",
@@ -94,6 +102,7 @@ def reset_registry(request):
         }, status=200)
         
     except Exception as e:
+        logger.error(f"Reset failed: {str(e)}", exc_info=True)
         return Response({"detail": f"Reset failed: {str(e)}"}, status=500)
 
 @api_view(["GET"])
