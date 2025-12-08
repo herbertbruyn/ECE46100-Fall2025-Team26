@@ -6,6 +6,7 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
 from django.db import transaction
+from django.views.decorators.csrf import csrf_exempt
 from .auth import require_auth, require_admin
 
 # Import base helpers
@@ -60,6 +61,7 @@ def derive_name(artifact_type: str, url: str) -> str:
 ###################################### API Views ######################################
 @api_view(["DELETE"])
 # @require_admin
+@csrf_exempt
 def reset_registry(request):
     """DELETE /reset - Reset registry to default state"""
     # Perform reset
