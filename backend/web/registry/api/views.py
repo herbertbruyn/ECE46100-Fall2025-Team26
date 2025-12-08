@@ -70,6 +70,7 @@ def reset_registry(request):
     """DELETE /reset - Reset registry to default state"""
     # Perform reset
     logger.info("Reset endpoint called")  # Add this
+    print("Reset endpoint called")
 
     try:
         with transaction.atomic():
@@ -95,6 +96,7 @@ def reset_registry(request):
             Code.objects.all().delete()
             
             logger.info("Reset completed successfully")
+            print("Reset successful")
         
         return Response({
             "detail": "Registry is reset",
@@ -103,6 +105,7 @@ def reset_registry(request):
         
     except Exception as e:
         logger.error(f"Reset failed: {str(e)}", exc_info=True)
+        print("Reset failed")
         return Response({"detail": f"Reset failed: {str(e)}"}, status=500)
 
 @api_view(["GET"])
