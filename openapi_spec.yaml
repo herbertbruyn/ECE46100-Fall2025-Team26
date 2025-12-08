@@ -2,7 +2,7 @@
 openapi: 3.0.2
 info:
   title: ECE 461 - Fall 2025 - Project Phase 2
-  version: 3.4.4
+  version: 3.4.7
   description: |-
     API for ECE 461/Fall 2025/Project Phase 2: A Trustworthy Model Registry"
 
@@ -222,6 +222,9 @@ paths:
       responses:
         "200":
           description: Artifact is updated.
+        "202":
+          description: |-
+            Artifact ingest accepted but the rating pipeline deferred the evaluation. Use this when the package is stored but rating is performed asynchronously and the artifact is dropped silently if the rating later fails. Subsequent requests to `/rate` or any other endpoint with this artifact id should return 404 until a rating result exists.
         "400":
           description: "There is missing field(s) in the artifact_type or artifact_id or it is formed improperly, or is invalid."
         "403":
@@ -653,13 +656,13 @@ paths:
                       - artifact_id: 3847247294
                         name: audience-classifier
                         source: config_json
-                      - artifact_id: 5738291045
-                        name: bookcorpus
-                        source: upstream_dataset
+                      - artifact_id: 9078563412
+                        name: bert-base-uncased
+                        source: config_json
                     edges:
-                      - from_node_artifact_id: 5738291045
+                      - from_node_artifact_id: 9078563412
                         to_node_artifact_id: 3847247294
-                        relationship: fine_tuning_dataset
+                        relationship: base_model
           description: Lineage graph extracted from structured metadata. (BASELINE)
         "400":
           description: "The lineage graph cannot be computed because the artifact metadata is missing or malformed."
