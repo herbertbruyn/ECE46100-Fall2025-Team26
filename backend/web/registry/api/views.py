@@ -359,3 +359,13 @@ def artifact_cost(request, artifact_type: str, id: int):
                 "total_cost": round(cost_mb, 2)
             }
         }, status=200)
+
+@api_view(["GET"])
+def tracks(request):
+    """GET /tracks - Return planned tracks"""
+    try:
+        return Response({
+            "plannedTracks": ["Other Security track"]
+        }, status=200)
+    except Exception:
+        return Response({"detail": "System error"}, status=500)
