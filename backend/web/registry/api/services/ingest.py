@@ -19,6 +19,7 @@ import hashlib
 import logging
 import re
 import time
+import requests
 from typing import Dict, Tuple, Optional, List
 from django.db import transaction
 from django.utils import timezone
@@ -47,11 +48,13 @@ try:
     from Services.Metric_Model_Service import ModelMetricService
     from Models.Manager_Models_Model import ModelManager
     from lib.HuggingFace_API_Manager import HuggingFaceAPIManager
+    from lib.Github_API_Manager import GitHubAPIManager
 except ImportError as e:
     logging.error(f"Failed to import metric service: {e}")
     ModelMetricService = None
     ModelManager = None
     HuggingFaceAPIManager = None
+    GitHubAPIManager = None
 
 logger = logging.getLogger(__name__)
 
@@ -147,7 +150,7 @@ class IngestService:
                 artifact.save()
                 
                 rating_start = time.time()
-                rating_scores = self._rate_artifact(local_path, source_url, name)
+                rating_scores = self._rate_artifact(local_path, source_url, name, code_name)
                 total_rating_time = time.time() - rating_start
                 
                 logger.info(f"Rating completed in {total_rating_time:.2f}s: net_score={rating_scores.get('net_score', 0):.3f}")
@@ -322,7 +325,7 @@ class IngestService:
             logging.warning(f"Could not extract parent model from config.json: {e}")
             return None
     
-    def _rate_artifact(self, local_path: str, source_url: str, name: str) -> Dict[str, float]:
+    def _rate_artifact(self, local_path: str, source_url: str, name: str, code_name: Optional[str] = None) -> Dict[str, float]:
         """
         Rate artifact using ModelMetricService
         This is SYNCHRONOUS in Option 2 - happens during upload
@@ -407,6 +410,137 @@ class IngestService:
             return sum(parent_scores) / len(parent_scores)
         else:
             return 0.6
+
+
+    def _calculate_reviewedness(self, code_name: Optional[str] = None) -> float:
+        """
+        Calculate reviewedness: Fraction of code (not weights) that was 
+        introduced through PRs with code reviews.
+        
+        This is an approximation based on the lines added in PRs vs total lines added.
+        
+        Returns:
+            float: Fraction between 0.0 and 1.0, or -1 if no GitHub repo linked
+        """
+        if not code_name or not self.github_manager:
+            logger.info("No code repository or GitHub manager available")
+            return -1
+        
+        CODE_EXTS = {
+            ".py", ".ipynb", ".pyi",
+            ".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs",
+            ".vue", ".svelte",
+            ".java",
+            ".go",
+            ".rs",
+            ".cpp", ".cc", ".c",
+            ".h", ".hpp",
+            ".cs",
+            ".rb",
+            ".php",
+            ".swift",
+            ".kt", ".scala",
+            ".sh", ".bash", ".ps1",
+            ".yaml", ".yml",
+            ".json",
+            ".toml",
+            ".ini", ".cfg", ".conf",
+            ".md", ".rst",
+            ".html", ".css",
+            ".scss", ".sass",
+            ".sql",
+            ".r", ".R",
+            ".dockerfile",
+            ".tf",
+        }
+        
+        try:
+            # Construct GitHub URL from code_name
+            if code_name.startswith('http'):
+                github_url = code_name
+            else:
+                github_url = f"https://github.com/{code_name}"
+            
+            owner, repo = self.github_manager.code_link_to_repo(github_url)
+            
+            # Compare lines added in reviewed PRs vs all commits
+            # This gives us an approximation of reviewedness
+            
+            # Get all merged PRs and categorize by review status
+            all_prs = self.github_manager.github_request(
+                path=f"/repos/{owner}/{repo}/pulls",
+                params={"state": "closed", "per_page": 100}
+            )
+            
+            reviewed_pr_lines = 0
+            unreviewed_pr_lines = 0
+            
+            for pr in all_prs:
+                if not pr.get('merged_at'):
+                    continue
+                
+                # Get files changed in this PR
+                pr_files = self.github_manager.github_request(
+                    path=f"/repos/{owner}/{repo}/pulls/{pr['number']}/files"
+                )
+                
+                # Count code lines
+                pr_code_lines = 0
+                for file in pr_files:
+                    filename_lower = file['filename'].lower()
+                    if any(filename_lower.endswith(ext) for ext in CODE_EXTS):
+                        pr_code_lines += file.get('additions', 0)
+                
+                # Check if reviewed
+                reviews = self.github_manager.github_request(
+                    path=f"/repos/{owner}/{repo}/pulls/{pr['number']}/reviews"
+                )
+                
+                if reviews and len(reviews) > 0:
+                    reviewed_pr_lines += pr_code_lines
+                else:
+                    unreviewed_pr_lines += pr_code_lines
+            
+            # Get commits not in any PR (direct commits)
+            all_commits = self.github_manager.github_request(
+                path=f"/repos/{owner}/{repo}/commits",
+                params={"per_page": 100}
+            )
+            
+            direct_commit_lines = 0
+            
+            for commit in all_commits:
+                # Check if this commit is in a PR
+                associated_prs = self.github_manager.github_request(
+                    path=f"/repos/{owner}/{repo}/commits/{commit['sha']}/pulls",
+                    headers={"Accept": "application/vnd.github.groot-preview+json"}
+                )
+                
+                # If not in a PR, it's a direct commit (unreviewed)
+                if not associated_prs or len(associated_prs) == 0:
+                    commit_detail = self.github_manager.github_request(
+                        path=f"/repos/{owner}/{repo}/commits/{commit['sha']}"
+                    )
+                    
+                    for file in commit_detail.get('files', []):
+                        filename_lower = file['filename'].lower()
+                        if any(filename_lower.endswith(ext) for ext in CODE_EXTS):
+                            direct_commit_lines += file.get('additions', 0)
+            
+            # Calculate fraction
+            total_lines = reviewed_pr_lines + unreviewed_pr_lines + direct_commit_lines
+            
+            if total_lines == 0:
+                logger.info(f"No code found in {owner}/{repo}")
+                return -1
+            
+            fraction = reviewed_pr_lines / total_lines
+            return min(1.0, max(0.0, fraction))
+            
+        except Exception as e:
+            logger.warning(f"Failed to calculate reviewedness for {code_name}: {e}")
+            return -1
+
     
     def _calculate_net_score(self, scores: Dict[str, float]) -> float:
         """Calculate weighted net score from individual metrics"""
