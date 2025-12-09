@@ -137,7 +137,7 @@ def artifact_create(request, artifact_type: str):
 
 
 @api_view(["GET", "PUT", "DELETE"])
-@require_auth
+# @require_auth
 def artifact_details(request, artifact_type: str, id: int):
     """GET, PUT, DELETE /artifacts/{artifact_type}/{id}"""
     obj = get_object_or_404(Artifact, pk=id, type=artifact_type)
