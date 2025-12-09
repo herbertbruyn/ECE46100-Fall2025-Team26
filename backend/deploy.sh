@@ -11,6 +11,11 @@ aws ecr get-login-password --region us-east-2 \
 docker stop backend || true
 docker rm backend || true
 
+# Remove old image to free space
+docker rmi $REPO || true
+# Prune dangling images to keep disk clean
+docker image prune -f
+
 # Pull latest image
 docker pull $REPO
 
