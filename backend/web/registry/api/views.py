@@ -8,6 +8,7 @@ from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
 from django.db import transaction
 from .auth import require_auth, require_admin
+from django.http import HttpResponse
 
 
 # Import base helpers
@@ -66,46 +67,40 @@ def derive_name(artifact_type: str, url: str) -> str:
 @api_view(["DELETE"])
 # @require_admin
 def reset_registry(request):
-    """DELETE /reset - Reset registry to default state"""
-    # Perform reset
-    logger.info("Reset endpoint called")  # Add this
-    print("Reset endpoint called")
-
+    """Most basic possible reset - no decorators at all"""
+    print("=" * 80)
+    print("RESET FUNCTION CALLED!")
+    print(f"Method: {request.method}")
+    print(f"Path: {request.path}")
+    print(f"User: {getattr(request, 'user', 'NO USER')}")
+    print("=" * 80)
+    
+    if request.method != "DELETE":
+        return HttpResponse('{"detail": "Method not allowed"}', 
+                          status=405, 
+                          content_type='application/json')
+    
     try:
-        with transaction.atomic():
-            # Count before deletion
-            counts = {
-                'artifacts': Artifact.objects.count(),
-                'ratings': ModelRating.objects.count(),
-                'datasets': Dataset.objects.count(),
-                'code_repos': Code.objects.count(),
-            }
-            
-            # Delete files
-            deleted_files = 0
-            for artifact in Artifact.objects.all():
-                if artifact.blob:
-                    artifact.blob.delete(save=False)
-                    deleted_files += 1
-            
-            # Delete database records
-            ModelRating.objects.all().delete()
-            Artifact.objects.all().delete()
-            Dataset.objects.all().delete()
-            Code.objects.all().delete()
-            
-            logger.info("Reset completed successfully")
-            print("Reset successful")
+        from .models import Artifact, Dataset, Code
         
-        return Response({
-            "detail": "Registry is reset",
-            "deleted": {**counts, "files": deleted_files}
-        }, status=200)
+        count = Artifact.objects.count()
+        print(f"Deleting {count} artifacts...")
         
+        Artifact.objects.all().delete()
+        Dataset.objects.all().delete()
+        Code.objects.all().delete()
+        
+        print("Reset successful!")
+        return HttpResponse('{"detail": "Registry is reset."}', 
+                          status=200, 
+                          content_type='application/json')
     except Exception as e:
-        logger.error(f"Reset failed: {str(e)}", exc_info=True)
-        print("Reset failed")
-        return Response({"detail": f"Reset failed: {str(e)}"}, status=500)
+        print(f"ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+        return HttpResponse(f'{{"detail": "Error: {str(e)}"}}', 
+                          status=500, 
+                          content_type='application/json')
 
 @api_view(["GET"])
 def health(request):
