@@ -263,7 +263,7 @@ def artifact_by_regex(request):
 
 
 @api_view(["POST"])
-@require_auth
+# @require_auth
 def artifacts_list(request):
     """POST /artifacts"""
     queries = request.data
