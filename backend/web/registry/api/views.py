@@ -3,12 +3,14 @@ import re
 import sys
 import logging
 from rest_framework import status
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
 from django.db import transaction
 from django.views.decorators.csrf import csrf_exempt
 from .auth import require_auth, require_admin
+from rest_framework.permissions import AllowAny
+from django.views.decorators.csrf import csrf_exempt
 
 # Import base helpers
 BASE_SRC = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "src"))
@@ -65,6 +67,7 @@ def derive_name(artifact_type: str, url: str) -> str:
 ###################################### API Views ######################################
 @api_view(["DELETE"])
 # @require_admin
+@permission_classes([AllowAny])  # Allow any request without authentication
 @csrf_exempt
 def reset_registry(request):
     """DELETE /reset - Reset registry to default state"""
