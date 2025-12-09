@@ -1,13 +1,12 @@
 import os
 import re
 import sys
-import logging
 from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
 from django.db import transaction
-
+from .auth import require_auth, require_admin
 
 # Import base helpers
 BASE_SRC = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "src"))
@@ -43,9 +42,6 @@ gh = GitHubAPIManager(token=os.getenv("GITHUB_TOKEN")) if GitHubAPIManager else 
 # Initialize ingest service
 ingest_service = IngestService() if IngestService else None
 
-# Set up logging
-logger = logging.getLogger(__name__)
-
 ############################### Helper Functions ######################################
 def derive_name(artifact_type: str, url: str) -> str:
     """Derive artifact name from URL"""
@@ -63,12 +59,10 @@ def derive_name(artifact_type: str, url: str) -> str:
 
 ###################################### API Views ######################################
 @api_view(["DELETE"])
+# @require_admin
 def reset_registry(request):
     """DELETE /reset - Reset registry to default state"""
     # Perform reset
-    logger.info("Reset endpoint called")  # Add this
-    print("Reset endpoint called")
-
     try:
         with transaction.atomic():
             # Count before deletion
@@ -91,9 +85,6 @@ def reset_registry(request):
             Artifact.objects.all().delete()
             Dataset.objects.all().delete()
             Code.objects.all().delete()
-            
-            logger.info("Reset completed successfully")
-            print("Reset successful")
         
         return Response({
             "detail": "Registry is reset",
@@ -101,8 +92,6 @@ def reset_registry(request):
         }, status=200)
         
     except Exception as e:
-        logger.error(f"Reset failed: {str(e)}", exc_info=True)
-        print("Reset failed")
         return Response({"detail": f"Reset failed: {str(e)}"}, status=500)
 
 @api_view(["GET"])
@@ -111,6 +100,7 @@ def health(request):
     return Response({"status": "ok"}, status=200)
 
 @api_view(["POST"])
+@require_auth
 def artifact_create(request, artifact_type: str):
     """
     POST /artifact/{artifact_type}
@@ -140,13 +130,14 @@ def artifact_create(request, artifact_type: str):
         source_url=url,
         artifact_type=artifact_type,
         revision=request.data.get("revision", "main"),
-        uploaded_by=None
+        uploaded_by=request.user
     )
     
     return Response(response_data, status=status_code)
 
 
 @api_view(["GET", "PUT", "DELETE"])
+@require_auth
 def artifact_details(request, artifact_type: str, id: int):
     """GET, PUT, DELETE /artifacts/{artifact_type}/{id}"""
     obj = get_object_or_404(Artifact, pk=id, type=artifact_type)
@@ -191,7 +182,7 @@ def artifact_details(request, artifact_type: str, id: int):
         status_code, response_data = ingest_service.ingest_artifact(
             source_url=new_url,
             artifact_type=artifact_type,
-            uploaded_by=None
+            uploaded_by=request.user
         )
         
         if status_code == 201:
@@ -213,6 +204,7 @@ def artifact_details(request, artifact_type: str, id: int):
 
 
 @api_view(["GET"])
+@require_auth
 def model_rate(request, id: int):
     """
     GET /artifact/model/{id}/rate
@@ -251,6 +243,7 @@ def model_rate(request, id: int):
 
 
 @api_view(["POST"])
+@require_auth
 def artifact_by_regex(request):
     """POST /artifact/byRegEx"""
     ser = ArtifactRegexSerializer(data=request.data)
@@ -270,6 +263,7 @@ def artifact_by_regex(request):
 
 
 @api_view(["POST"])
+@require_auth
 def artifacts_list(request):
     """POST /artifacts"""
     queries = request.data
@@ -319,6 +313,7 @@ def artifacts_list(request):
 
 
 @api_view(["GET"])
+@require_auth
 def artifact_cost(request, artifact_type: str, id: int):
     """GET /artifact/{artifact_type}/{id}/cost"""
     obj = get_object_or_404(Artifact, pk=id, type=artifact_type)

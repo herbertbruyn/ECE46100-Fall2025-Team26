@@ -282,55 +282,54 @@ class Artifact(models.Model):
             }
         }
     
-    # Access control methods - DISABLED for baseline (security track only)
-    # These methods are not used in baseline requirements
-    # def can_user_access(self, user) -> bool:
-    #     """Check if user can access this artifact"""
-    #     if not user:
-    #         return self.is_public
-    #     
-    #     if user.is_admin:
-    #         return True
-    #     
-    #     if self.is_public:
-    #         return True
-    #     
-    #     if self.uploaded_by == user:
-    #         return True
-    #     
-    #     return self.permissions.filter(user=user).exists()
-    # 
-    # def can_user_modify(self, user) -> bool:
-    #     """Check if user can modify this artifact"""
-    #     if not user:
-    #         return False
-    #     
-    #     if user.is_admin:
-    #         return True
-    #     
-    #     if self.uploaded_by == user:
-    #         return True
-    #     
-    #     return self.permissions.filter(
-    #         user=user,
-    #         permission_type__in=['owner', 'editor']
-    #     ).exists()
-    # 
-    # def can_user_delete(self, user) -> bool:
-    #     """Check if user can delete this artifact"""
-    #     if not user:
-    #         return False
-    #     
-    #     if user.is_admin:
-    #         return True
-    #     
-    #     if self.uploaded_by == user:
-    #         return True
-    #     
-    #     return self.permissions.filter(
-    #         user=user,
-    #         permission_type='owner'
-    #     ).exists()
+    # Access control methods
+    def can_user_access(self, user) -> bool:
+        """Check if user can access this artifact"""
+        if not user:
+            return self.is_public
+        
+        if user.is_admin:
+            return True
+        
+        if self.is_public:
+            return True
+        
+        if self.uploaded_by == user:
+            return True
+        
+        return self.permissions.filter(user=user).exists()
+    
+    def can_user_modify(self, user) -> bool:
+        """Check if user can modify this artifact"""
+        if not user:
+            return False
+        
+        if user.is_admin:
+            return True
+        
+        if self.uploaded_by == user:
+            return True
+        
+        return self.permissions.filter(
+            user=user,
+            permission_type__in=['owner', 'editor']
+        ).exists()
+    
+    def can_user_delete(self, user) -> bool:
+        """Check if user can delete this artifact"""
+        if not user:
+            return False
+        
+        if user.is_admin:
+            return True
+        
+        if self.uploaded_by == user:
+            return True
+        
+        return self.permissions.filter(
+            user=user,
+            permission_type='owner'
+        ).exists()
     
     def __str__(self):
         return f"{self.type}/{self.name} ({self.id})"
