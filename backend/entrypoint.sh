@@ -6,6 +6,9 @@ set -e
 # Run database migrations
 echo "Applying database migrations..."
 python web/registry/manage.py migrate
+# setup auth
+echo "Setting up authentication..."
+python web/registry/manage.py setup_auth
 
 # Start the server (this executes the CMD passed from the Dockerfile)
 echo "Starting server..."
