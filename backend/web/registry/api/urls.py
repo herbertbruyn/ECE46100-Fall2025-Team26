@@ -1,11 +1,10 @@
 # api/urls.py
 from django.urls import path, re_path
-from django.views.decorators.csrf import csrf_exempt
 from . import views, auth_views
 
 urlpatterns = [
     # Admin reset endpoint
-    path("reset", csrf_exempt(views.reset_registry)),
+    path("reset", views.reset_registry),
 
     # Health
     path("health", views.health),
