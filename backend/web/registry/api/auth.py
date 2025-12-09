@@ -16,15 +16,20 @@ from .models import User, AuthToken
 
 def authenticate_user(request):
     """
-    Authenticate user from X-Authorization header
-    
+    Authenticate user from X-Authorization or Authorization header
+
     Returns:
         tuple: (user, error_response)
         - If successful: (User object, None)
         - If failed: (None, Response object with error)
     """
-    auth_token = request.headers.get('X-Authorization')
-    
+    # Check both X-Authorization and Authorization headers
+    auth_token = request.headers.get('X-Authorization') or request.headers.get('Authorization')
+
+    # Strip "bearer " or "Token " prefix if present
+    if auth_token and ' ' in auth_token:
+        auth_token = auth_token.split(' ', 1)[1]
+
     if not auth_token:
         return None, Response(
             {"detail": "Authentication failed due to invalid or missing AuthenticationToken"},
