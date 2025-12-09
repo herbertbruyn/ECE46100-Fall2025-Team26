@@ -8,6 +8,7 @@ Provides:
 - Permission checking
 - Token validation
 """
+# Branch retains security 
 from functools import wraps
 from rest_framework.response import Response
 from rest_framework.decorators import api_view
