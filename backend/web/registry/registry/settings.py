@@ -32,9 +32,9 @@ if SECRET_KEY is None:
 DEBUG = os.getenv("DJANGO_DEBUG", "1") == "1"
 
 ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['*']
 hosts = os.getenv("ALLOWED_HOSTS")
 if not hosts:
-    ALLOWED_HOSTS = ['*']
     raise RuntimeError("ALLOWED_HOSTS is required in production")
 hosts = hosts.split(",")
 for h in hosts:
