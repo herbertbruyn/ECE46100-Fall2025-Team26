@@ -7,7 +7,6 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
 from django.db import transaction
-from .auth import require_auth, require_admin
 
 
 # Import base helpers
@@ -64,7 +63,6 @@ def derive_name(artifact_type: str, url: str) -> str:
 
 ###################################### API Views ######################################
 @api_view(["DELETE"])
-# @require_admin
 def reset_registry(request):
     """DELETE /reset - Reset registry to default state"""
     # Perform reset
@@ -113,7 +111,6 @@ def health(request):
     return Response({"status": "ok"}, status=200)
 
 @api_view(["POST"])
-@require_auth
 def artifact_create(request, artifact_type: str):
     """
     POST /artifact/{artifact_type}
@@ -143,14 +140,13 @@ def artifact_create(request, artifact_type: str):
         source_url=url,
         artifact_type=artifact_type,
         revision=request.data.get("revision", "main"),
-        uploaded_by=request.user
+        uploaded_by=None
     )
     
     return Response(response_data, status=status_code)
 
 
 @api_view(["GET", "PUT", "DELETE"])
-@require_auth
 def artifact_details(request, artifact_type: str, id: int):
     """GET, PUT, DELETE /artifacts/{artifact_type}/{id}"""
     obj = get_object_or_404(Artifact, pk=id, type=artifact_type)
@@ -195,7 +191,7 @@ def artifact_details(request, artifact_type: str, id: int):
         status_code, response_data = ingest_service.ingest_artifact(
             source_url=new_url,
             artifact_type=artifact_type,
-            uploaded_by=request.user
+            uploaded_by=None
         )
         
         if status_code == 201:
@@ -217,7 +213,6 @@ def artifact_details(request, artifact_type: str, id: int):
 
 
 @api_view(["GET"])
-@require_auth
 def model_rate(request, id: int):
     """
     GET /artifact/model/{id}/rate
@@ -256,7 +251,6 @@ def model_rate(request, id: int):
 
 
 @api_view(["POST"])
-@require_auth
 def artifact_by_regex(request):
     """POST /artifact/byRegEx"""
     ser = ArtifactRegexSerializer(data=request.data)
@@ -276,7 +270,6 @@ def artifact_by_regex(request):
 
 
 @api_view(["POST"])
-@require_auth
 def artifacts_list(request):
     """POST /artifacts"""
     queries = request.data
@@ -326,7 +319,6 @@ def artifacts_list(request):
 
 
 @api_view(["GET"])
-@require_auth
 def artifact_cost(request, artifact_type: str, id: int):
     """GET /artifact/{artifact_type}/{id}/cost"""
     obj = get_object_or_404(Artifact, pk=id, type=artifact_type)
