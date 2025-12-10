@@ -125,12 +125,14 @@ def artifact_create(request, artifact_type: str):
             status=500
         )
     
+    user = getattr(request, 'user', None)  # Get user if exists, otherwise None
+
     # Use ingest service
     status_code, response_data = ingest_service.ingest_artifact(
         source_url=url,
         artifact_type=artifact_type,
         revision=request.data.get("revision", "main"),
-        uploaded_by=request.user
+        uploaded_by=user
     )
     
     return Response(response_data, status=status_code)
