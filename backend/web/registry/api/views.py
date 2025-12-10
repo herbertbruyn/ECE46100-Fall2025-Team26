@@ -100,7 +100,7 @@ def health(request):
     return Response({"status": "ok"}, status=200)
 
 @api_view(["POST"])
-@require_auth
+# @require_auth
 def artifact_create(request, artifact_type: str):
     """
     POST /artifact/{artifact_type}
@@ -204,7 +204,7 @@ def artifact_details(request, artifact_type: str, id: int):
 
 
 @api_view(["GET"])
-@require_auth
+# @require_auth
 def model_rate(request, id: int):
     """
     GET /artifact/model/{id}/rate
@@ -243,7 +243,7 @@ def model_rate(request, id: int):
 
 
 @api_view(["POST"])
-@require_auth
+# @require_auth
 def artifact_by_regex(request):
     """POST /artifact/byRegEx"""
     ser = ArtifactRegexSerializer(data=request.data)
@@ -313,7 +313,7 @@ def artifacts_list(request):
 
 
 @api_view(["GET"])
-@require_auth
+# @require_auth
 def artifact_cost(request, artifact_type: str, id: int):
     """GET /artifact/{artifact_type}/{id}/cost"""
     obj = get_object_or_404(Artifact, pk=id, type=artifact_type)
