@@ -38,6 +38,10 @@ if not hosts:
 hosts = hosts.split(",")
 for h in hosts:
     ALLOWED_HOSTS.append(h)
+print("ALLOWED HOSTS: ")
+for h in ALLOWED_HOSTS:
+    print(h)
+print("------------------")
 
 
 # Application definition
