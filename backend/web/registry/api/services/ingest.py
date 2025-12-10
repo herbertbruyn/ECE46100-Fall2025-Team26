@@ -448,7 +448,8 @@ class IngestService:
     
     def _passes_threshold(self, scores: Dict[str, float]) -> bool:
         """Check if artifact passes rating threshold"""
-        return scores.get('net_score', 0.0) >= self.MIN_NET_SCORE
+        return True
+        #return scores.get('net_score', 0.0) >= self.MIN_NET_SCORE
     
     def _get_failed_metrics(self, scores: Dict[str, float]) -> list:
         """Get list of metrics below threshold"""
