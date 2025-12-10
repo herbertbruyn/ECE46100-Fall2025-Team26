@@ -28,9 +28,15 @@ from .models import Artifact, Dataset, Code, ModelRating
 
 from .serializers import ArtifactCreateSerializer, ArtifactRegexSerializer
 
-# Import the ingest service
+# Import the ingest service based on configuration
 try:
-    from .services.ingest import IngestService
+    from django.conf import settings
+    if getattr(settings, 'USE_S3', False):
+        # Use S3-optimized service for production (streams directly to S3)
+        from .services.ingest_s3_optimized import S3OptimizedIngestService as IngestService
+    else:
+        # Use standard service for local development
+        from .services.ingest import IngestService
 except ImportError:
     # Fallback if service not found
     IngestService = None
