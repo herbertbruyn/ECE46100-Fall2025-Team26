@@ -20,4 +20,4 @@ docker image prune -f
 docker pull $REPO
 
 # Run new container
-docker run --memory="512m" -d --name backend -p 8000:8000 -e DJANGO_SECRET_KEY=$DJANGO_SECRET_KEY -e ALLOWED_HOSTS=$ALLOWED_HOSTS -e GEN_AI_STUDIO_API_KEY=$GEN_AI_STUDIO_API_KEY $REPO
+docker run --memory="512m" -d --name backend -p 8000:8000 -e HF_TOKEN=$HF_TOKEN -e DJANGO_SECRET_KEY=$DJANGO_SECRET_KEY -e ALLOWED_HOSTS=$ALLOWED_HOSTS -e GEN_AI_STUDIO_API_KEY=$GEN_AI_STUDIO_API_KEY $REPO
