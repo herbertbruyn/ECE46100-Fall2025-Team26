@@ -215,7 +215,7 @@ class Artifact(models.Model):
     # Storage
     blob = models.FileField(upload_to="registry/raw/", blank=True)
     s3_key = models.CharField(max_length=512, blank=True, null=True)  # S3 object key
-    download_url = models.URLField(max_length=1024, blank=True, null=True)  # Presigned URL
+    download_url = models.TextField(blank=True, null=True)  # Presigned URL (can be very long)
     sha256 = models.CharField(max_length=64, blank=True, db_index=True)
     sha256_hash = models.CharField(max_length=64, blank=True, null=True)  # Alias for compatibility
     file_size = models.BigIntegerField(default=0, null=True, blank=True)  # Alias for size_bytes
