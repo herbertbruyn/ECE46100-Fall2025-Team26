@@ -13,12 +13,14 @@ Usage:
   Set USE_S3=True and configure AWS credentials in settings.py
 """
 from __future__ import annotations
+from functools import total_ordering
 import os
 import sys
 import logging
 import hashlib
 import tempfile
 import shutil
+import time
 from typing import Dict, Tuple, Optional
 from django.db import transaction
 from django.utils import timezone
@@ -131,7 +133,9 @@ class S3OptimizedIngestService:
                 artifact.status_message = "Computing metrics..."
                 artifact.save()
 
+                rating_start = time.time()
                 rating_scores = self._rate_artifact(local_metrics_dir, source_url, name)
+                total_rating_time = time.time() - rating_start
                 logger.info(f"Rating completed: net_score={rating_scores.get('net_score', 0):.3f}")
 
                 # Step 5: Check threshold
@@ -150,6 +154,7 @@ class S3OptimizedIngestService:
                     }
             else:
                 rating_scores = self._fallback_rating()
+                total_rating_time - 0.0
 
             # Step 6: Create zip in S3
             artifact.status_message = "Creating zip archive in S3..."
@@ -167,6 +172,7 @@ class S3OptimizedIngestService:
                 sha256=sha256_digest,
                 size_bytes=size_bytes,
                 rating_scores=rating_scores
+                total_rating_time=total_rating_time
             )
 
             # Cleanup S3 temp files
@@ -274,7 +280,8 @@ class S3OptimizedIngestService:
         zip_s3_key: str,
         sha256: str,
         size_bytes: int,
-        rating_scores: Dict
+        rating_scores: Dict,
+        total_rating_time: float
     ):
         """Persist artifact and rating to database"""
         with transaction.atomic():
@@ -293,6 +300,7 @@ class S3OptimizedIngestService:
                     artifact=artifact,
                     name=artifact.name,
                     category=artifact.type.upper(),
+                    total_rating_time=total_rating_time(),
                     **{k: v for k, v in rating_scores.items() if not k.endswith('_latency')},
                     **{k: v for k, v in rating_scores.items() if k.endswith('_latency')}
                 )
