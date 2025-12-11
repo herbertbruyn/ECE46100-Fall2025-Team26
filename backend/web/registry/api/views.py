@@ -114,36 +114,72 @@ def extract_parent_model(artifact):
 # @require_admin
 def reset_registry(request):
     """DELETE /reset - Reset registry to default state"""
+    import boto3
+    from botocore.exceptions import ClientError
+    from django.conf import settings
+
     # Perform reset
     try:
-        with transaction.atomic():
-            # Count before deletion
-            counts = {
-                'artifacts': Artifact.objects.count(),
-                'ratings': ModelRating.objects.count(),
-                'datasets': Dataset.objects.count(),
-                'code_repos': Code.objects.count(),
-            }
-            
-            # Delete files
-            deleted_files = 0
+        # Count before deletion
+        counts = {
+            'artifacts': Artifact.objects.count(),
+            'ratings': ModelRating.objects.count(),
+            'datasets': Dataset.objects.count(),
+            'code_repos': Code.objects.count(),
+        }
+
+        # Delete files (both local blob and S3)
+        deleted_local = 0
+        deleted_s3 = 0
+
+        # Check if using S3
+        use_s3 = getattr(settings, 'USE_S3', False) or os.getenv('USE_S3', 'false').lower() == 'true'
+
+        if use_s3:
+            # Initialize S3 client
+            s3_client = boto3.client('s3')
+            bucket = os.getenv('AWS_STORAGE_BUCKET_NAME')
+
+            if bucket:
+                for artifact in Artifact.objects.all():
+                    # Delete from S3
+                    if artifact.s3_key:
+                        try:
+                            s3_client.delete_object(Bucket=bucket, Key=artifact.s3_key)
+                            deleted_s3 += 1
+                            logging.info(f"Deleted S3 object: {artifact.s3_key}")
+                        except ClientError as e:
+                            logging.warning(f"Failed to delete S3 object {artifact.s3_key}: {e}")
+
+                    # Also delete local blob if exists
+                    if artifact.blob:
+                        artifact.blob.delete(save=False)
+                        deleted_local += 1
+        else:
+            # Local storage only
             for artifact in Artifact.objects.all():
                 if artifact.blob:
                     artifact.blob.delete(save=False)
-                    deleted_files += 1
-            
-            # Delete database records
+                    deleted_local += 1
+
+        # Delete database records
+        with transaction.atomic():
             ModelRating.objects.all().delete()
             Artifact.objects.all().delete()
             Dataset.objects.all().delete()
             Code.objects.all().delete()
-        
+
         return Response({
             "detail": "Registry is reset",
-            "deleted": {**counts, "files": deleted_files}
+            "deleted": {
+                **counts,
+                "local_files": deleted_local,
+                "s3_objects": deleted_s3
+            }
         }, status=200)
-        
+
     except Exception as e:
+        logging.error(f"Reset failed: {e}")
         return Response({"detail": f"Reset failed: {str(e)}"}, status=500)
 
 @api_view(["GET"])
