@@ -16,7 +16,9 @@ import json
 import logging
 import boto3
 import psycopg2
-from typing import Dict
+import re
+from typing import Dict, Optional
+import time
 
 # Configure logging
 logger = logging.getLogger()
@@ -85,8 +87,12 @@ def lambda_handler(event, context):
             # Download minimal files for metrics
             local_metrics_dir = s3_ingest.download_minimal_for_metrics(s3_keys)
 
-            # Compute ratings (using fallback for now)
-            rating_scores = compute_ratings(local_metrics_dir, source_url, name)
+            # Extract code repository name from model metadata
+            code_name = extract_code_repo_from_metadata(local_metrics_dir)
+            logger.info(f"Extracted code repo: {code_name}")
+
+            # Compute ratings
+            rating_scores = compute_ratings(local_metrics_dir, source_url, name, code_name)
             logger.info(f"Rating completed: net_score={rating_scores.get('net_score', 0):.3f}")
 
             # Check threshold (424 logic)
@@ -315,7 +321,7 @@ def update_artifact_complete(
             conn.close()
 
 
-def compute_ratings(local_path: str, source_url: str, name: str) -> Dict:
+def compute_ratings(local_path: str, source_url: str, name: str, code_name: Optional[str] = None) -> Dict:
     """
     Compute ratings for the artifact using ModelMetricService
     """
@@ -323,12 +329,17 @@ def compute_ratings(local_path: str, source_url: str, name: str) -> Dict:
         # Import metric service (should be in Lambda package)
         from Services.Metric_Model_Service import ModelMetricService
         from Models import Model
+        from lib.Github_API_Manager import GitHubAPIManager
         import time
 
         logger.info(f"Starting rating computation for {name}")
 
         # Initialize service
         metric_service = ModelMetricService()
+        
+        # Initialize GitHub manager for reviewedness
+        github_token = os.getenv("GITHUB_TOKEN")
+        github_manager = GitHubAPIManager(token=github_token) if github_token else None
 
         # Create Model object from local files
         model_data = create_model_object(local_path, source_url, name)
@@ -359,16 +370,33 @@ def compute_ratings(local_path: str, source_url: str, name: str) -> Dict:
             scores[metric_name] = result.value if hasattr(result, 'value') else 0.0
             scores[f"{metric_name}_latency"] = latency
 
-        # Placeholder for missing metrics
-        for metric in ["reproducibility", "reviewedness", "tree_score"]:
-            scores[metric] = 0.6
-            scores[f"{metric}_latency"] = 0.0
+        # Calculate new metrics
+        # Reproducibility - placeholder for now (requires running demo code)
+        scores["reproducibility"] = 0.6
+        scores["reproducibility_latency"] = 0.0
+        
+        # Reviewedness
+        start = time.time()
+        scores["reviewedness"] = calculate_reviewedness(github_manager, code_name)
+        scores["reviewedness_latency"] = time.time() - start
+        
+        # Tree score
+        start = time.time()
+        scores["tree_score"] = calculate_tree_score(local_path, name)
+        scores["tree_score_latency"] = time.time() - start
 
         # Calculate net score as weighted average
         scores["net_score"] = calculate_net_score(scores)
         scores["net_score_latency"] = sum(
             scores.get(f"{m}_latency", 0)
             for m in ["performance_claims", "ramp_up_time", "bus_factor", "license"]
+        )
+        
+        scores["total_rating_time"] = sum(
+            scores.get(f"{m}_latency", 0)
+            for m in ["performance_claims", "ramp_up_time", "bus_factor", "license",
+                     "dataset_and_code_score", "dataset_quality", "code_quality",
+                     "size_score", "reproducibility", "reviewedness", "tree_score"]
         )
 
         logger.info(f"Rating completed: net_score={scores['net_score']:.3f}")
@@ -377,6 +405,217 @@ def compute_ratings(local_path: str, source_url: str, name: str) -> Dict:
     except Exception as e:
         logger.error(f"Rating computation failed: {str(e)}", exc_info=True)
         return fallback_rating()
+
+
+def calculate_tree_score(local_path: str, artifact_name: str) -> float:
+    """
+    Calculate tree score: Average of net scores of parents in the registry
+    
+    Args:
+        local_path: Path to downloaded model files
+        artifact_name: Name of the current artifact
+        
+    Returns:
+        float: Average score of parent models, or 0.6 if no parents found
+    """
+    try:
+        parent_model_ids = extract_parent_models_from_config(local_path)
+
+        if not parent_model_ids:
+            logger.info("No parent model found in config")
+            return 0.6  # Default score when no parents
+
+        parent_scores = []
+        conn = get_db_connection()
+        
+        try:
+            with conn.cursor() as cur:
+                for parent_model_id in parent_model_ids:
+                    # Extract just the model name from full ID (e.g., "org/model" -> "model")
+                    parent_name = parent_model_id.split('/')[-1] if '/' in parent_model_id else parent_model_id
+                    
+                    # Query database for parent artifact rating
+                    cur.execute("""
+                        SELECT mr.net_score
+                        FROM artifacts a
+                        JOIN model_ratings mr ON a.id = mr.artifact_id
+                        WHERE a.type = 'model'
+                        AND a.status = 'completed'
+                        AND (a.name ILIKE %s OR a.name ILIKE %s)
+                        ORDER BY a.created_at DESC
+                        LIMIT 1
+                    """, (f"%{parent_name}%", parent_model_id))
+                    
+                    result = cur.fetchone()
+                    if result and result[0] is not None:
+                        parent_scores.append(float(result[0]))
+                        logger.info(f"Found parent {parent_name} with score {result[0]}")
+        finally:
+            conn.close()
+
+        if parent_scores:
+            avg_score = sum(parent_scores) / len(parent_scores)
+            logger.info(f"Tree score calculated: {avg_score:.3f} from {len(parent_scores)} parents")
+            return avg_score
+        else:
+            logger.info("No parent scores found in registry")
+            return 0.6  # Default when parents not in registry
+
+    except Exception as e:
+        logger.warning(f"Failed to calculate tree score: {e}")
+        return 0.6
+
+
+def extract_parent_models_from_config(local_path: str) -> list:
+    """
+    Extract parent model IDs from config.json
+    
+    Looks for fields like:
+    - _name_or_path
+    - base_model
+    - parent_model
+    
+    Returns:
+        list: List of parent model IDs
+    """
+    try:
+        config_path = os.path.join(local_path, 'config.json')
+        if not os.path.exists(config_path):
+            return []
+        
+        with open(config_path, 'r') as f:
+            config = json.load(f)
+        
+        parent_ids = []
+        
+        # Check common fields that indicate parent models
+        parent_fields = ['_name_or_path', 'base_model', 'parent_model', 'base_model_name_or_path']
+        
+        for field in parent_fields:
+            if field in config and config[field]:
+                value = config[field]
+                # Skip local paths or generic names
+                if isinstance(value, str) and '/' in value and not value.startswith('.'):
+                    parent_ids.append(value)
+        
+        return parent_ids
+        
+    except Exception as e:
+        logger.warning(f"Failed to extract parent models from config: {e}")
+        return []
+
+
+def calculate_reviewedness(github_manager: Optional[GitHubAPIManager], code_name: Optional[str]) -> float:
+    """
+    Calculate reviewedness: Fraction of code (not weights) that was 
+    introduced through PRs with code reviews.
+    
+    This is an approximation based on the lines added in PRs vs total lines added.
+    
+    Args:
+        github_manager: GitHub API manager instance
+        code_name: GitHub repository name or URL
+        
+    Returns:
+        float: Fraction between 0.0 and 1.0, or -1 if no GitHub repo linked
+    """
+    if not code_name or not github_manager:
+        logger.info("No code repository or GitHub manager available")
+        return -1.0
+
+    CODE_EXTS = {
+        ".py", ".ipynb", ".pyi",
+        ".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs",
+        ".vue", ".svelte",
+        ".java", ".go", ".rs",
+        ".cpp", ".cc", ".c", ".h", ".hpp",
+        ".cs", ".rb", ".php", ".swift",
+        ".kt", ".scala",
+        ".sh", ".bash", ".ps1",
+        ".yaml", ".yml", ".json", ".toml",
+        ".ini", ".cfg", ".conf",
+        ".md", ".rst",
+        ".html", ".css", ".scss", ".sass",
+        ".sql", ".r", ".R",
+        ".dockerfile", ".tf",
+    }
+
+    try:
+        # Construct GitHub URL from code_name
+        if code_name.startswith('http'):
+            github_url = code_name
+        else:
+            github_url = f"https://github.com/{code_name}"
+
+        owner, repo = github_manager.code_link_to_repo(github_url)
+        logger.info(f"Calculating reviewedness for {owner}/{repo}")
+
+        # Get merged PRs (limit to avoid rate limiting)
+        all_prs = github_manager.github_request(
+            path=f"/repos/{owner}/{repo}/pulls",
+            params={"state": "closed", "per_page": 50}  # Reduced from 100
+        )
+
+        reviewed_pr_lines = 0
+        unreviewed_pr_lines = 0
+        pr_count = 0
+
+        for pr in all_prs:
+            if not pr.get('merged_at'):
+                continue
+            
+            pr_count += 1
+            if pr_count > 30:  # Limit to avoid excessive API calls
+                break
+
+            try:
+                # Get files changed in this PR
+                pr_files = github_manager.github_request(
+                    path=f"/repos/{owner}/{repo}/pulls/{pr['number']}/files"
+                )
+
+                # Count code lines (not weights/data files)
+                pr_code_lines = 0
+                for file in pr_files:
+                    filename_lower = file['filename'].lower()
+                    # Skip weight files
+                    if any(skip in filename_lower for skip in ['.bin', '.safetensors', '.ckpt', '.pth', '.h5']):
+                        continue
+                    # Count code files
+                    if any(filename_lower.endswith(ext) for ext in CODE_EXTS):
+                        pr_code_lines += file.get('additions', 0)
+
+                if pr_code_lines == 0:
+                    continue
+
+                # Check if reviewed (has at least one review)
+                reviews = github_manager.github_request(
+                    path=f"/repos/{owner}/{repo}/pulls/{pr['number']}/reviews"
+                )
+
+                if reviews and len(reviews) > 0:
+                    reviewed_pr_lines += pr_code_lines
+                else:
+                    unreviewed_pr_lines += pr_code_lines
+                    
+            except Exception as e:
+                logger.warning(f"Failed to process PR #{pr['number']}: {e}")
+                continue
+
+        # Calculate fraction
+        total_lines = reviewed_pr_lines + unreviewed_pr_lines
+
+        if total_lines == 0:
+            logger.info(f"No code lines found in PRs for {owner}/{repo}")
+            return -1.0
+
+        fraction = reviewed_pr_lines / total_lines
+        logger.info(f"Reviewedness: {reviewed_pr_lines}/{total_lines} = {fraction:.3f}")
+        return min(1.0, max(0.0, fraction))
+
+    except Exception as e:
+        logger.warning(f"Failed to calculate reviewedness for {code_name}: {e}")
+        return -1.0
 
 
 def create_model_object(local_path: str, source_url: str, name: str):
@@ -483,3 +722,55 @@ def fallback_rating() -> Dict[str, float]:
         "size_score_latency": 0.0,
         "total_rating_time": 0.0
     }
+
+
+def extract_code_repo_from_metadata(local_path: str) -> Optional[str]:
+    """
+    Extract GitHub repository URL from model metadata files
+    
+    Checks:
+    1. config.json for 'repo' or similar fields
+    2. README.md for GitHub links
+    
+    Returns:
+        str: GitHub repo URL or None if not found
+    """
+    try:
+        # Check config.json first
+        config_path = os.path.join(local_path, 'config.json')
+        if os.path.exists(config_path):
+            with open(config_path, 'r') as f:
+                config = json.load(f)
+            
+            # Common fields that contain GitHub repo
+            repo_fields = ['repo', 'repository', 'code_repository', 'github_repo']
+            for field in repo_fields:
+                if field in config and config[field]:
+                    value = config[field]
+                    if isinstance(value, str) and 'github.com' in value:
+                        return value
+        
+        # Check README.md for GitHub links
+        for readme_name in ['README.md', 'README.txt', 'readme.md']:
+            readme_path = os.path.join(local_path, readme_name)
+            if os.path.exists(readme_path):
+                try:
+                    with open(readme_path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                    
+                    # Look for GitHub URLs
+                    import re
+                    github_pattern = r'https?://github\.com/[\w\-]+/[\w\-]+'
+                    matches = re.findall(github_pattern, content)
+                    if matches:
+                        # Return the first GitHub URL found
+                        return matches[0]
+                except Exception as e:
+                    logger.warning(f"Failed to read {readme_name}: {e}")
+        
+        logger.info("No GitHub repository found in metadata")
+        return None
+        
+    except Exception as e:
+        logger.warning(f"Failed to extract code repo: {e}")
+        return None
