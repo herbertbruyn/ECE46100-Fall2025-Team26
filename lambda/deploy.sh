@@ -25,6 +25,10 @@ cp lambda_function.py package/
 # Copy S3 ingest utilities from backend
 cp ../backend/web/registry/api/services/s3_direct_ingest.py package/
 
+# Copy entire src directory (Models, Services, lib, Helpers)
+echo "Copying backend/src for metrics computation..."
+cp -r ../backend/src/* package/
+
 # Create zip
 cd package
 zip -r ../lambda.zip .

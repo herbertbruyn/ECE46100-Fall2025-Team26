@@ -317,12 +317,141 @@ def update_artifact_complete(
 
 def compute_ratings(local_path: str, source_url: str, name: str) -> Dict:
     """
-    Compute ratings for the artifact
-
-    TODO: Integrate actual metric computation
-    For now, using fallback values
+    Compute ratings for the artifact using ModelMetricService
     """
-    return fallback_rating()
+    try:
+        # Import metric service (should be in Lambda package)
+        from Services.Metric_Model_Service import ModelMetricService
+        from Models import Model
+        import time
+
+        logger.info(f"Starting rating computation for {name}")
+
+        # Initialize service
+        metric_service = ModelMetricService()
+
+        # Create Model object from local files
+        model_data = create_model_object(local_path, source_url, name)
+
+        if not model_data:
+            logger.warning("Could not create Model object, using fallback")
+            return fallback_rating()
+
+        scores = {}
+
+        # Run all evaluations
+        evaluations = [
+            ("performance_claims", metric_service.EvaluatePerformanceClaims),
+            ("ramp_up_time", metric_service.EvaluateRampUpTime),
+            ("bus_factor", metric_service.EvaluateBusFactor),
+            ("license", metric_service.EvaluateLicense),
+            ("dataset_and_code_score", metric_service.EvaluateDatasetAndCodeAvailabilityScore),
+            ("dataset_quality", metric_service.EvaluateDatasetsQuality),
+            ("code_quality", metric_service.EvaluateCodeQuality),
+            ("size_score", metric_service.EvaluateSize),
+        ]
+
+        for metric_name, eval_func in evaluations:
+            start = time.time()
+            result = eval_func(model_data)
+            latency = time.time() - start
+
+            scores[metric_name] = result.value if hasattr(result, 'value') else 0.0
+            scores[f"{metric_name}_latency"] = latency
+
+        # Placeholder for missing metrics
+        for metric in ["reproducibility", "reviewedness", "tree_score"]:
+            scores[metric] = 0.6
+            scores[f"{metric}_latency"] = 0.0
+
+        # Calculate net score as weighted average
+        scores["net_score"] = calculate_net_score(scores)
+        scores["net_score_latency"] = sum(
+            scores.get(f"{m}_latency", 0)
+            for m in ["performance_claims", "ramp_up_time", "bus_factor", "license"]
+        )
+
+        logger.info(f"Rating completed: net_score={scores['net_score']:.3f}")
+        return scores
+
+    except Exception as e:
+        logger.error(f"Rating computation failed: {str(e)}", exc_info=True)
+        return fallback_rating()
+
+
+def create_model_object(local_path: str, source_url: str, name: str):
+    """Create Model object from downloaded files"""
+    try:
+        from Models import Model
+        import os
+
+        # Read README if exists
+        readme_path = None
+        for fname in ['README.md', 'README.txt', 'readme.md']:
+            potential_path = os.path.join(local_path, fname)
+            if os.path.exists(potential_path):
+                readme_path = potential_path
+                break
+
+        # Read config.json if exists
+        config_path = os.path.join(local_path, 'config.json')
+        card = None
+        if os.path.exists(config_path):
+            with open(config_path, 'r') as f:
+                card = json.load(f)
+
+        # Create Model object
+        model = Model()
+        model.name = name
+        model.url = source_url
+        model.readme_path = readme_path
+        model.card = card
+
+        # Try to get repo info from HuggingFace API
+        try:
+            from huggingface_hub import HfApi
+            hf_api = HfApi()
+
+            # Extract repo_id from URL
+            repo_id = source_url.split('huggingface.co/')[-1]
+            if '/tree/' in repo_id:
+                repo_id = repo_id.split('/tree/')[0]
+
+            # Get repo info
+            repo_info = hf_api.repo_info(repo_id)
+            model.repo_commit_history = []  # Would need API call
+            model.repo_contributors = []     # Would need API call
+
+        except:
+            pass  # Use defaults
+
+        return model
+
+    except Exception as e:
+        logger.error(f"Failed to create Model object: {e}")
+        return None
+
+
+def calculate_net_score(scores: Dict[str, float]) -> float:
+    """Calculate weighted net score from individual metrics"""
+    weights = {
+        "performance_claims": 0.15,
+        "ramp_up_time": 0.10,
+        "bus_factor": 0.10,
+        "license": 0.15,
+        "dataset_quality": 0.15,
+        "code_quality": 0.15,
+        "reproducibility": 0.10,
+        "reviewedness": 0.05,
+        "tree_score": 0.03,
+        "size_score": 0.02,
+    }
+
+    net = 0.0
+    for metric, weight in weights.items():
+        net += scores.get(metric, 0.0) * weight
+
+    return net
 
 
 def fallback_rating() -> Dict[str, float]:
