@@ -171,7 +171,7 @@ class S3OptimizedIngestService:
                 zip_s3_key=zip_s3_key,
                 sha256=sha256_digest,
                 size_bytes=size_bytes,
-                rating_scores=rating_scores
+                rating_scores=rating_scores,
                 total_rating_time=total_rating_time
             )
 
