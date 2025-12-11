@@ -300,7 +300,7 @@ class S3OptimizedIngestService:
                     artifact=artifact,
                     name=artifact.name,
                     category=artifact.type.upper(),
-                    total_rating_time=total_rating_time(),
+                    total_rating_time=total_rating_time,
                     **{k: v for k, v in rating_scores.items() if not k.endswith('_latency')},
                     **{k: v for k, v in rating_scores.items() if k.endswith('_latency')}
                 )
