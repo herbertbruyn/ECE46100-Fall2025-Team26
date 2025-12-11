@@ -28,7 +28,8 @@ class AsyncIngestService:
     """
 
     def __init__(self):
-        self.lambda_client = boto3.client('lambda')
+        region = os.getenv('AWS_REGION') or os.getenv('AWS_DEFAULT_REGION', 'us-east-2')
+        self.lambda_client = boto3.client('lambda', region_name=region)
         self.lambda_function = os.getenv('INGEST_LAMBDA_FUNCTION', 'artifact-ingest-processor')
 
     def ingest_artifact(
