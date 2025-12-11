@@ -57,7 +57,8 @@ class S3OptimizedIngestService:
         self,
         source_url: str,
         artifact_type: str,
-        revision: str = "main"
+        revision: str = "main",
+        uploaded_by=None
     ) -> Tuple[int, Dict]:
         """
         Main ingest pipeline with S3 direct streaming
@@ -103,7 +104,8 @@ class S3OptimizedIngestService:
                 name=name,
                 type=artifact_type,
                 source_url=source_url,
-                status="pending"
+                status="pending",
+                uploaded_by=uploaded_by
             )
             logger.info(f"Created artifact {artifact.id} with status=pending")
 
