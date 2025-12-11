@@ -31,7 +31,12 @@ from .serializers import ArtifactCreateSerializer, ArtifactRegexSerializer
 # Import the ingest service based on configuration
 try:
     from django.conf import settings
-    if getattr(settings, 'USE_S3', False):
+
+    # Check if Lambda async mode is enabled
+    if os.getenv('USE_LAMBDA_ASYNC', 'false').lower() == 'true':
+        # Use async Lambda service (returns 202, best for production)
+        from .services.ingest_async import AsyncIngestService as IngestService
+    elif getattr(settings, 'USE_S3', False):
         # Use S3-optimized service for production (streams directly to S3)
         from .services.ingest_s3_optimized import S3OptimizedIngestService as IngestService
     else:

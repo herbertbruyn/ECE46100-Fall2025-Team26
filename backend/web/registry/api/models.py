@@ -190,6 +190,7 @@ class Artifact(models.Model):
     
     STATUS_CHOICES = [
         ("pending", "Pending"),
+        ("downloading", "Downloading"),
         ("rating", "Rating"),
         ("completed", "Completed"),
         ("failed", "Failed"),
