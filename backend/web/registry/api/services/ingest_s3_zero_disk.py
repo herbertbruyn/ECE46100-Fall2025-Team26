@@ -169,7 +169,6 @@ class S3ZeroDiskIngestService:
                 "id": artifact_id,
                 "status": "completed",
                 "name": artifact.name,
-                "version": artifact.version,
                 "net_score": net_score,
                 "metrics": metrics,
                 "download_url": download_url
