@@ -41,8 +41,8 @@ try:
         # Use async Lambda service (returns 202, best for production)
         from .services.ingest_async import AsyncIngestService as IngestService
     elif getattr(settings, 'USE_S3', False):
-        # Use S3-optimized service for production (streams directly to S3)
-        from .services.ingest_s3_optimized import S3OptimizedIngestService as IngestService
+        # Use zero-disk S3 service (no temp files, queued requests, streams to S3)
+        from .services.ingest_s3_zero_disk import S3ZeroDiskIngestService as IngestService
     else:
         # Use standard service for local development
         from .services.ingest import IngestService
