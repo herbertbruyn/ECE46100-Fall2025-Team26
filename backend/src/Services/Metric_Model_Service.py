@@ -983,3 +983,164 @@ class ModelMetricService:
         except Exception as e:
             logging.error(f"Failed to evaluate license: {e}")
             raise RuntimeError("License evaluation failed") from e
+        
+    def EvaluateReproducibility(self, Data: Model) -> MetricResult:
+        """
+        Evaluate reproducibility based on demonstration code
+        
+        Per specification:
+        "Whether the model can be run using only the demonstration code 
+        included in the model card"
+        
+        Scoring:
+        - 0.0: No demonstration code found OR code doesn't run
+        - 0.5: Code runs with debugging/modifications
+        - 1.0: Code runs with no changes needed
+        
+        Since we cannot actually execute the code, we assess based on:
+        - Presence of runnable code examples
+        - Completeness of the code (imports, setup, execution)
+        - Documentation quality around the code
+        """
+        try:
+            score = 0.0
+            details = {}
+            
+            # Collect all text content
+            combined_text = ""
+            
+            # Get README content
+            if hasattr(Data, 'readme_path') and Data.readme_path:
+                try:
+                    with open(Data.readme_path, 'r', encoding='utf-8') as f:
+                        combined_text += f.read() + "\n"
+                except Exception as e:
+                    logging.debug(f"Could not read README: {e}")
+            
+            # Get card content
+            if hasattr(Data, 'card') and Data.card:
+                combined_text += str(Data.card) + "\n"
+            
+            # Convert to lowercase for checking
+            text_lower = combined_text.lower()
+            
+            # If no content, return 0
+            if not combined_text.strip():
+                return MetricResult(
+                    metric_type=MetricType.PERFORMANCE_CLAIMS,  # TODO: Add REPRODUCIBILITY
+                    value=0.0,
+                    details={
+                        "reason": "No documentation found",
+                        "has_code": False
+                    },
+                    latency_ms=0
+                )
+            
+            # Check for demonstration code
+            has_code_block = False
+            has_complete_example = False
+            
+            # Look for code blocks (markdown format)
+            import re
+            code_blocks = re.findall(r'```[\s\S]*?```', combined_text)
+            
+            if code_blocks:
+                has_code_block = True
+                details['code_blocks_found'] = len(code_blocks)
+                
+                # Check if code blocks contain actual Python/model code
+                for block in code_blocks:
+                    block_lower = block.lower()
+                    
+                    # Check for model execution patterns
+                    execution_indicators = [
+                        'import',           # Has imports
+                        'from',             # Has imports
+                        'model',            # References model
+                        'predict',          # Shows prediction
+                        'inference',        # Shows inference
+                        'generate',         # Generation
+                        '.forward(',        # Forward pass
+                        'tokenizer',        # Tokenization
+                        'pipeline(',        # Pipeline usage
+                    ]
+                    
+                    indicators_found = sum(1 for ind in execution_indicators 
+                                        if ind in block_lower)
+                    
+                    # If code block has multiple execution indicators, it's complete
+                    if indicators_found >= 3:
+                        has_complete_example = True
+                        details['execution_indicators_found'] = indicators_found
+                        break
+            
+            # Also check for inline code examples
+            if not has_code_block:
+                inline_code = re.findall(r'`[^`]+`', combined_text)
+                if inline_code:
+                    has_code_block = True
+                    details['inline_code_found'] = len(inline_code)
+            
+            # Determine score based on code quality
+            if not has_code_block:
+                # No demonstration code found
+                score = 0.0
+                details['reason'] = "No demonstration code found"
+                details['has_code'] = False
+                
+            elif has_complete_example:
+                # Complete example with imports and execution
+                score = 1.0
+                details['reason'] = "Complete demonstration code with imports and execution"
+                details['has_code'] = True
+                details['code_completeness'] = "complete"
+                
+            else:
+                # Has code but incomplete or would need debugging
+                score = 0.5
+                details['reason'] = "Demonstration code present but may need debugging"
+                details['has_code'] = True
+                details['code_completeness'] = "partial"
+            
+            # Additional checks to validate the score
+            if score > 0:
+                # Check for common issues that would require debugging
+                issues = []
+                
+                # Missing dependencies/imports section
+                if 'install' not in text_lower and 'requirements' not in text_lower:
+                    if 'pip' not in text_lower and 'conda' not in text_lower:
+                        issues.append("No installation instructions")
+                
+                # Missing model loading instructions
+                if score == 1.0:
+                    if 'load' not in text_lower and 'from_pretrained' not in text_lower:
+                        issues.append("Unclear model loading")
+                
+                # If there are issues, downgrade from 1.0 to 0.5
+                if issues and score == 1.0:
+                    score = 0.5
+                    details['issues_found'] = issues
+                    details['reason'] = "Code present but has issues: " + ", ".join(issues)
+            
+            return MetricResult(
+                metric_type=MetricType.PERFORMANCE_CLAIMS,  # TODO: Add REPRODUCIBILITY
+                value=score,
+                details=details,
+                latency_ms=0,
+                error=None
+            )
+            
+        except Exception as e:
+            logging.error(f"Failed to evaluate reproducibility: {e}")
+            return MetricResult(
+                metric_type=MetricType.PERFORMANCE_CLAIMS,
+                value=0.0,
+                details={
+                    "error": str(e),
+                    "reason": "Evaluation failed",
+                    "has_code": False
+                },
+                latency_ms=0,
+                error=str(e)
+            )

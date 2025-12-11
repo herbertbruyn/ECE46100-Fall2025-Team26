@@ -13,6 +13,7 @@ class MetricType(Enum):
     DATASET_QUALITY = "dataset_quality"
     CODE_QUALITY = "code_quality"
     PERFORMANCE_CLAIMS = "performance_claims"
+    REPRODUCIBILITY = "reproducibility"
 
 
 @dataclass(frozen=True)
