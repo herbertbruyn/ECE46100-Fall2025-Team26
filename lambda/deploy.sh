@@ -9,7 +9,7 @@ RUNTIME="python3.11"
 HANDLER="lambda_function.lambda_handler"
 MEMORY=2048  # 2GB RAM
 TIMEOUT=900  # 15 minutes
-ROLE_ARN="${LAMBDA_ROLE_ARN}"  # Set this in environment
+ROLE_ARN="arn:aws:iam::748442897107:role/service-role/artifact-ingest-processor-role-8kmv56e1"  # Set this in environment
 
 # Create deployment package
 echo "Creating deployment package..."
