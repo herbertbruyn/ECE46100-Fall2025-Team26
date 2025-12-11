@@ -154,7 +154,7 @@ class S3OptimizedIngestService:
                     }
             else:
                 rating_scores = self._fallback_rating()
-                total_rating_time - 0.0
+                total_rating_time = 0.0
 
             # Step 6: Create zip in S3
             artifact.status_message = "Creating zip archive in S3..."
