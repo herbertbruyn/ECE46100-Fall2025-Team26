@@ -1055,7 +1055,7 @@ class ModelMetricService:
                     # Check for model execution patterns
                     execution_indicators = [
                         'import',           # Has imports
-                        'from ',            # Has imports
+                        'from',             # Has imports
                         'model',            # References model
                         'predict',          # Shows prediction
                         'inference',        # Shows inference
