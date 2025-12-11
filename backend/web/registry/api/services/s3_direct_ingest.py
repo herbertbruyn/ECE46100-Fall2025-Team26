@@ -140,14 +140,27 @@ class S3DirectIngest:
                         # Get filename for zip archive
                         arcname = s3_key.split('/')[-1]
 
-                        # Read in chunks to avoid RAM issues
-                        file_data = response['Body'].read()
-
-                        # Add to zip
-                        zipf.writestr(arcname, file_data)
-
-                        # Update hash
-                        sha256_hash.update(file_data)
+                        # Stream in chunks to avoid loading entire file into RAM
+                        chunk_size = 1024 * 1024  # 1MB chunks
+                        file_hash = hashlib.sha256()
+                        
+                        # Create a temporary file for this individual file
+                        with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
+                            tmp_file_path = tmp_file.name
+                            
+                            # Download in chunks
+                            for chunk in iter(lambda: response['Body'].read(chunk_size), b''):
+                                tmp_file.write(chunk)
+                                file_hash.update(chunk)
+                        
+                        # Add the temp file to zip
+                        zipf.write(tmp_file_path, arcname)
+                        
+                        # Update overall hash
+                        sha256_hash.update(file_hash.digest())
+                        
+                        # Clean up temp file
+                        os.remove(tmp_file_path)
 
                     except Exception as e:
                         logger.warning(f"Failed to add {s3_key} to zip: {e}")
