@@ -7,6 +7,7 @@ This function runs with high RAM (2-10GB) and handles:
 3. Computing ratings
 4. Updating database with final status
 
+
 Handles 424 rejection when rating fails threshold
 """
 import os
