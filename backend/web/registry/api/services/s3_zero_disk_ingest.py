@@ -34,9 +34,13 @@ class S3ZeroDiskIngest:
     def __init__(self):
         self.s3_client = boto3.client('s3')
         self.bucket = os.getenv('AWS_STORAGE_BUCKET_NAME')
+        self.hf_token = os.getenv('HF_TOKEN') or os.getenv('HUGGINGFACE_TOKEN')
 
         if not self.bucket:
             raise ValueError("AWS_STORAGE_BUCKET_NAME not configured")
+
+        if self.hf_token:
+            logger.info("Using HuggingFace authentication token for gated content access")
 
     def download_and_zip_to_s3_streaming(
         self,
@@ -153,8 +157,12 @@ class S3ZeroDiskIngest:
                         revision=revision
                     )
 
-                    # Stream download from HuggingFace
-                    response = requests.get(url, stream=True)
+                    # Stream download from HuggingFace (with auth for gated content)
+                    headers = {}
+                    if self.hf_token:
+                        headers['Authorization'] = f'Bearer {self.hf_token}'
+
+                    response = requests.get(url, stream=True, headers=headers)
                     response.raise_for_status()
 
                     # Get file size if available
@@ -362,7 +370,11 @@ class S3ZeroDiskIngest:
                             revision=revision
                         )
 
-                        response = requests.get(url)
+                        headers = {}
+                        if self.hf_token:
+                            headers['Authorization'] = f'Bearer {self.hf_token}'
+
+                        response = requests.get(url, headers=headers)
                         response.raise_for_status()
 
                         result[filename] = response.content
@@ -456,14 +468,36 @@ class S3ZeroDiskIngest:
         """
         logger.info(f"Streaming GitHub repo to S3: {repo_id} (branch: {revision})")
 
-        # GitHub provides ZIP archives at: https://github.com/owner/repo/archive/refs/heads/branch.zip
-        github_zip_url = f"https://github.com/{repo_id}/archive/refs/heads/{revision}.zip"
-
         upload_id = None  # Initialize before try block for error handling
+        response = None
+
+        # Try requested branch first, then fallback to alternative
+        fallback_branch = "master" if revision == "main" else "main"
+
+        for branch_attempt in [revision, fallback_branch]:
+            github_zip_url = f"https://github.com/{repo_id}/archive/refs/heads/{branch_attempt}.zip"
+            try:
+                response = requests.get(github_zip_url, stream=True, timeout=300)
+                if response.status_code == 200:
+                    if branch_attempt != revision:
+                        logger.info(f"Branch '{revision}' not found, using '{branch_attempt}' instead")
+                    break
+                elif response.status_code == 404 and branch_attempt == revision:
+                    logger.info(f"Branch '{revision}' not found, trying '{fallback_branch}'...")
+                    continue
+                else:
+                    response.raise_for_status()
+                    break
+            except requests.exceptions.RequestException as e:
+                if branch_attempt == fallback_branch:
+                    # Both branches failed, raise error
+                    raise RuntimeError(f"Failed to download from branches '{revision}' and '{fallback_branch}': {e}")
+                continue
+
+        if not response or response.status_code != 200:
+            raise RuntimeError(f"Failed to download GitHub repo {repo_id}")
+
         try:
-            # Stream download from GitHub
-            response = requests.get(github_zip_url, stream=True, timeout=300)
-            response.raise_for_status()
 
             # Initialize multipart upload to S3
             upload_id = self.s3_client.create_multipart_upload(
