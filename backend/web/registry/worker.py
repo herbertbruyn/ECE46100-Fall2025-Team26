@@ -41,7 +41,7 @@ def process_sqs_messages(service: AsyncIngestService):
         logger.error("SQS_QUEUE_URL not set")
         return
 
-    sqs_client = boto3.client('sqs')
+    sqs_client = boto3.client('sqs', region_name=os.getenv('AWS_REGION'))
     logger.info(f"Starting SQS worker, polling: {queue_url}")
 
     while True:
