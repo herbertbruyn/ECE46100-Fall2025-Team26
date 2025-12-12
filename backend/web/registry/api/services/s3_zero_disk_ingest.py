@@ -101,11 +101,18 @@ class S3ZeroDiskIngest:
         output_key: str
     ) -> Tuple[str, int]:
         """
-        Create ZIP file entirely in S3 using multipart upload
-        NO local files are created - everything streams through memory
+        Create ZIP file with TRUE streaming - never holds full ZIP in memory
 
-        Strategy: Build complete ZIP in memory, upload in parts when needed
+        Strategy:
+        1. Stream files from HuggingFace one at a time
+        2. Build ZIP format incrementally in memory buffer
+        3. Upload to S3 multipart when buffer reaches threshold (10MB)
+        4. Clear buffer and continue - constant memory usage
         """
+        import zipfile
+        import struct
+        import time
+
         # Initialize multipart upload
         multipart = self.s3_client.create_multipart_upload(
             Bucket=self.bucket,
@@ -119,78 +126,172 @@ class S3ZeroDiskIngest:
         sha256_hash = hashlib.sha256()
         total_size = 0
 
+        # Buffer for accumulating ZIP data before uploading
+        # S3 multipart minimum is 5MB (except last part), we use 10MB for safety
+        upload_buffer = io.BytesIO()
+        min_part_size = 10 * 1024 * 1024  # 10MB
+
+        # ZIP central directory - built as we go
+        central_directory = []
+        offset = 0  # Track offset in final ZIP file
+
         try:
-            # Use in-memory buffer for ZIP creation
-            zip_buffer = io.BytesIO()
+            for file_path in file_list:
+                try:
+                    # Get download URL
+                    url = hf_hub_url(
+                        repo_id=repo_id,
+                        filename=file_path,
+                        repo_type=repo_type,
+                        revision=revision
+                    )
 
-            # Create ZIP using zipfile but with in-memory buffer
-            import zipfile
+                    # Stream download from HuggingFace
+                    response = requests.get(url, stream=True)
+                    response.raise_for_status()
 
-            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                for idx, file_path in enumerate(file_list):
-                    logger.info(f"Processing file {idx+1}/{len(file_list)}: {file_path}")  # ADD THIS
+                    # Get file size if available
+                    file_size = int(response.headers.get('content-length', 0))
 
-                    try:
-                        # Get download URL
-                        url = hf_hub_url(
-                            repo_id=repo_id,
-                            filename=file_path,
-                            repo_type=repo_type,
-                            revision=revision
-                        )
+                    # Build ZIP local file header
+                    filename_bytes = file_path.encode('utf-8')
+                    local_header_offset = offset
 
-                        # Stream download (no disk!)
-                        response = requests.get(url, stream=True)
-                        response.raise_for_status()
+                    # ZIP local file header (simplified - no compression for streaming)
+                    local_header = struct.pack('<I', 0x04034b50)  # Local file header signature
+                    local_header += struct.pack('<H', 10)  # Version needed
+                    local_header += struct.pack('<H', 0)   # Flags
+                    local_header += struct.pack('<H', 0)   # Compression (0=stored, no compression)
+                    local_header += struct.pack('<H', 0)   # Mod time
+                    local_header += struct.pack('<H', 0)   # Mod date
+                    local_header += struct.pack('<I', 0)   # CRC32 (will update later)
+                    local_header += struct.pack('<I', file_size)  # Compressed size
+                    local_header += struct.pack('<I', file_size)  # Uncompressed size
+                    local_header += struct.pack('<H', len(filename_bytes))  # Filename length
+                    local_header += struct.pack('<H', 0)   # Extra field length
+                    local_header += filename_bytes
 
-                        # Read file content into memory (in chunks to avoid huge RAM spikes)
-                        file_data = io.BytesIO()
-                        for chunk in response.iter_content(chunk_size=1024 * 1024):  # 1MB chunks
-                            file_data.write(chunk)
+                    upload_buffer.write(local_header)
+                    offset += len(local_header)
+                    sha256_hash.update(local_header)
 
-                        file_data.seek(0)
-                        file_content = file_data.getvalue()
+                    # Stream file content and calculate CRC32
+                    import zlib
+                    crc32 = 0
+                    actual_size = 0
 
-                        # Add to ZIP in memory
-                        zipf.writestr(file_path, file_content)
-                        logger.info(f"✓ Added {file_path} to ZIP ({len(file_content)} bytes)")  # ADD THIS
+                    for chunk in response.iter_content(chunk_size=1024 * 1024):  # 1MB chunks
+                        if chunk:
+                            upload_buffer.write(chunk)
+                            offset += len(chunk)
+                            actual_size += len(chunk)
+                            crc32 = zlib.crc32(chunk, crc32)
+                            sha256_hash.update(chunk)
 
-                        # Update hash
-                        sha256_hash.update(file_content)
+                            # Upload when buffer reaches threshold
+                            if upload_buffer.tell() >= min_part_size:
+                                upload_buffer.seek(0)
+                                chunk_data = upload_buffer.read()
 
-                        logger.debug(f"Added {file_path} to ZIP ({len(file_content)} bytes)")
+                                response_part = self.s3_client.upload_part(
+                                    Bucket=self.bucket,
+                                    Key=output_key,
+                                    PartNumber=part_number,
+                                    UploadId=upload_id,
+                                    Body=chunk_data
+                                )
 
-                    except Exception as e:
-                        logger.warning(f"Failed to process {file_path}: {e}")
-                        continue
+                                parts.append({
+                                    'PartNumber': part_number,
+                                    'ETag': response_part['ETag']
+                                })
 
-            # ZIP is now complete in memory - upload it in parts
-            zip_buffer.seek(0)
+                                total_size += len(chunk_data)
+                                part_number += 1
+                                logger.debug(f"Uploaded part {part_number - 1} ({len(chunk_data)} bytes)")
 
-            # Upload in 50MB chunks
-            chunk_size = 50 * 1024 * 1024
+                                # Clear buffer for next part
+                                upload_buffer = io.BytesIO()
 
-            while True:
-                chunk = zip_buffer.read(chunk_size)
-                if not chunk:
-                    break
+                    # Store central directory entry
+                    central_directory.append({
+                        'filename': filename_bytes,
+                        'crc32': crc32 & 0xffffffff,
+                        'size': actual_size,
+                        'offset': local_header_offset
+                    })
 
-                response = self.s3_client.upload_part(
+                    logger.debug(f"Added {file_path} to ZIP ({actual_size} bytes)")
+
+                except Exception as e:
+                    logger.warning(f"Failed to process {file_path}: {e}")
+                    continue
+
+            # Build central directory
+            central_dir_start = offset
+            central_dir_data = io.BytesIO()
+
+            for entry in central_directory:
+                cd_header = struct.pack('<I', 0x02014b50)  # Central directory signature
+                cd_header += struct.pack('<H', 10)  # Version made by
+                cd_header += struct.pack('<H', 10)  # Version needed
+                cd_header += struct.pack('<H', 0)   # Flags
+                cd_header += struct.pack('<H', 0)   # Compression
+                cd_header += struct.pack('<H', 0)   # Mod time
+                cd_header += struct.pack('<H', 0)   # Mod date
+                cd_header += struct.pack('<I', entry['crc32'])
+                cd_header += struct.pack('<I', entry['size'])  # Compressed
+                cd_header += struct.pack('<I', entry['size'])  # Uncompressed
+                cd_header += struct.pack('<H', len(entry['filename']))
+                cd_header += struct.pack('<H', 0)   # Extra field length
+                cd_header += struct.pack('<H', 0)   # Comment length
+                cd_header += struct.pack('<H', 0)   # Disk number
+                cd_header += struct.pack('<H', 0)   # Internal attributes
+                cd_header += struct.pack('<I', 0)   # External attributes
+                cd_header += struct.pack('<I', entry['offset'])
+                cd_header += entry['filename']
+
+                central_dir_data.write(cd_header)
+                offset += len(cd_header)
+
+            central_dir_bytes = central_dir_data.getvalue()
+            upload_buffer.write(central_dir_bytes)
+            sha256_hash.update(central_dir_bytes)
+
+            # End of central directory record
+            eocd = struct.pack('<I', 0x06054b50)  # EOCD signature
+            eocd += struct.pack('<H', 0)   # Disk number
+            eocd += struct.pack('<H', 0)   # Disk with central dir
+            eocd += struct.pack('<H', len(central_directory))  # Entries on this disk
+            eocd += struct.pack('<H', len(central_directory))  # Total entries
+            eocd += struct.pack('<I', len(central_dir_bytes))  # Central dir size
+            eocd += struct.pack('<I', central_dir_start)  # Central dir offset
+            eocd += struct.pack('<H', 0)   # Comment length
+
+            upload_buffer.write(eocd)
+            sha256_hash.update(eocd)
+            offset += len(eocd)
+
+            # Upload final buffer
+            if upload_buffer.tell() > 0:
+                upload_buffer.seek(0)
+                final_data = upload_buffer.read()
+
+                response_part = self.s3_client.upload_part(
                     Bucket=self.bucket,
                     Key=output_key,
                     PartNumber=part_number,
                     UploadId=upload_id,
-                    Body=chunk
+                    Body=final_data
                 )
 
                 parts.append({
                     'PartNumber': part_number,
-                    'ETag': response['ETag']
+                    'ETag': response_part['ETag']
                 })
 
-                total_size += len(chunk)
-                part_number += 1
-                logger.debug(f"Uploaded part {part_number - 1} ({len(chunk)} bytes)")
+                total_size += len(final_data)
+                logger.debug(f"Uploaded final part {part_number} ({len(final_data)} bytes)")
 
             # Complete multipart upload
             self.s3_client.complete_multipart_upload(
