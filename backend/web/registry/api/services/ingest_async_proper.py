@@ -183,8 +183,8 @@ class AsyncIngestService:
                 revision=revision
             )
 
-            # Compute metrics
-            metrics = self._compute_metrics(minimal_files, source_url, repo_id)
+            # Compute metrics (pass artifact_id for tree_score)
+            metrics = self._compute_metrics(minimal_files, source_url, repo_id, artifact_id)
             net_score = self._calculate_net_score(metrics)
 
             # STEP 2: Quality gate check
@@ -258,9 +258,167 @@ class AsyncIngestService:
             return '/'.join(parts)
         return None
 
-    def _compute_metrics(self, minimal_files: Dict[str, bytes], source_url: str, repo_id: str) -> Dict:
-        """Compute metrics (simplified for now)"""
-        # TODO: Integrate full ModelMetricService
+    def _compute_metrics(self, minimal_files: Dict[str, bytes], source_url: str, repo_id: str, artifact_id: int) -> Dict:
+        """
+        Compute ALL metrics using the real ModelMetricService
+
+        Integrates with the existing metrics service in backend/src/Services
+        """
+        import sys
+        import os
+        import tempfile
+        import json
+
+        # Add src directory to path to import metrics service
+        src_path = os.path.join(os.path.dirname(__file__), '../../../../src')
+        if os.path.exists(src_path) and src_path not in sys.path:
+            sys.path.insert(0, src_path)
+
+        try:
+            from Services.Metric_Model_Service import ModelMetricService
+
+            # Create model data object from minimal_files
+            class MinimalModelData:
+                """Adapter to convert minimal_files data into Model interface for metrics"""
+                def __init__(self, minimal_files: Dict[str, bytes], source_url: str, repo_id: str):
+                    # README (write to temp file - metrics service expects path)
+                    self.readme_path = None
+                    for filename in ['README.md', 'README.txt', 'README']:
+                        if filename in minimal_files:
+                            try:
+                                fd, path = tempfile.mkstemp(suffix='.md', text=True)
+                                with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                                    content = minimal_files[filename].decode('utf-8', errors='ignore')
+                                    f.write(content)
+                                self.readme_path = path
+                                break
+                            except Exception as e:
+                                logger.warning(f"Failed to write README temp file: {e}")
+
+                    # Card data (model card)
+                    self.card = None
+
+                    # Repo metadata (size, license, etc.)
+                    self.repo_metadata = {}
+                    if '_hf_repo_metadata' in minimal_files:
+                        try:
+                            self.repo_metadata = json.loads(minimal_files['_hf_repo_metadata'].decode('utf-8'))
+                        except:
+                            pass
+
+                    # Commit history (for bus factor)
+                    self.repo_commit_history = []
+                    if '_hf_commit_history' in minimal_files:
+                        try:
+                            commits = json.loads(minimal_files['_hf_commit_history'].decode('utf-8'))
+                            # Convert to format expected by bus factor metric
+                            self.repo_commit_history = [
+                                {
+                                    'commit': {
+                                        'author': {
+                                            'date': c.get('date', '')
+                                        }
+                                    }
+                                }
+                                for c in commits
+                            ]
+                        except:
+                            pass
+
+                    # Contributors (for bus factor)
+                    self.repo_contributors = []
+                    if '_hf_contributors_count' in minimal_files:
+                        try:
+                            contrib_data = json.loads(minimal_files['_hf_contributors_count'].decode('utf-8'))
+                            count = contrib_data.get('count', 0)
+                            # Create mock contributor list (bus factor only needs count)
+                            self.repo_contributors = [{'contributions': 1} for _ in range(count)]
+                        except:
+                            pass
+
+                    # File structure (for code quality)
+                    self.repo_contents = []
+                    if '_hf_file_structure' in minimal_files:
+                        try:
+                            self.repo_contents = json.loads(minimal_files['_hf_file_structure'].decode('utf-8'))
+                        except:
+                            pass
+
+                    # Dataset cards and infos (for dataset quality)
+                    self.dataset_cards = {}
+                    self.dataset_infos = {}
+
+                    self.source_url = source_url
+                    self.repo_id = repo_id
+
+                def __del__(self):
+                    """Clean up temp README file"""
+                    if self.readme_path and os.path.exists(self.readme_path):
+                        try:
+                            os.unlink(self.readme_path)
+                        except:
+                            pass
+
+            # Create data object
+            model_data = MinimalModelData(minimal_files, source_url, repo_id)
+
+            # Initialize metrics service
+            metric_service = ModelMetricService()
+
+            # Compute ALL metrics IN PARALLEL (like src/main.py)
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+
+            metrics = {}
+
+            # Define all evaluations
+            evaluations = [
+                ('performance_claims', lambda: metric_service.EvaluatePerformanceClaims(model_data)),
+                ('bus_factor', lambda: metric_service.EvaluateBusFactor(model_data)),
+                ('size_score', lambda: metric_service.EvaluateSize(model_data)),
+                ('dataset_and_code_score', lambda: metric_service.EvaluateDatasetAndCodeAvailabilityScore(model_data)),
+                ('code_quality', lambda: metric_service.EvaluateCodeQuality(model_data)),
+                ('dataset_quality', lambda: metric_service.EvaluateDatasetsQuality(model_data)),
+                ('ramp_up_time', lambda: metric_service.EvaluateRampUpTime(model_data)),
+                ('license_score', lambda: metric_service.EvaluateLicense(model_data)),
+                ('reproducibility', lambda: metric_service.EvaluateReproducibility(model_data)),
+                ('tree_score', lambda: self._compute_tree_score(artifact_id, minimal_files, repo_id)),
+                ('reviewedness', lambda: self._compute_reviewedness(minimal_files, repo_id, source_url)),
+            ]
+
+            # Run metrics in parallel with 4 workers
+            logger.info("Computing metrics in parallel (max_workers=4)...")
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                future_to_name = {executor.submit(eval_func): name for name, eval_func in evaluations}
+
+                for future in as_completed(future_to_name):
+                    name = future_to_name[future]
+                    try:
+                        result = future.result()
+                        # Handle MetricResult objects
+                        if hasattr(result, 'value'):
+                            metrics[name] = result.value
+                        else:
+                            metrics[name] = result
+                        logger.info(f"Completed {name}: {metrics[name]}")
+                    except Exception as e:
+                        logger.warning(f"{name} metric failed: {e}")
+                        metrics[name] = 0.5
+
+            logger.info(f"Computed all metrics: {metrics}")
+            return metrics
+
+        except ImportError as e:
+            logger.error(f"Failed to import ModelMetricService: {e}")
+            return self._compute_metrics_fallback(minimal_files)
+        except Exception as e:
+            logger.error(f"Metrics computation failed: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return self._compute_metrics_fallback(minimal_files)
+
+    def _compute_metrics_fallback(self, minimal_files: Dict[str, bytes]) -> Dict:
+        """Fallback metrics if ModelMetricService unavailable"""
+        logger.warning("Using fallback metrics computation")
         readme_content = None
         for filename in ['README.md', 'README.txt']:
             if filename in minimal_files:
@@ -270,20 +428,53 @@ class AsyncIngestService:
                 except:
                     pass
 
-        metrics = {
+        return {
             'documentation': min(len(readme_content) / 1000, 1.0) if readme_content else 0.0,
             'ramp_up_time': 0.5,
             'bus_factor': 0.5,
-            'correctness': 0.5,
-            'responsive_maintainer': 0.5,
-            'license_score': 0.5
+            'size_score': 0.5,
+            'code_quality': 0.5,
+            'dataset_quality': 0.5,
+            'dataset_and_code_score': 0.5,
+            'performance_claims': 0.5,
+            'license_score': 0.5,
+            'reproducibility': 0.5,
+            'tree_score': 0.5,
+            'reviewedness': 0.5
         }
-        return metrics
 
     def _calculate_net_score(self, metrics: Dict) -> float:
-        """Calculate net score"""
-        values = [v for v in metrics.values() if isinstance(v, (int, float))]
-        return sum(values) / len(values) if values else 0.0
+        """
+        Calculate weighted net score based on main.py specification:
+
+        NetScore = 0.20*RampUp + 0.15*BusFactor + 0.15*PerfClaim + 0.15*License +
+                   0.10*Size + 0.10*DatasetCode + 0.10*DatasetQual + 0.05*CodeQual +
+                   0.05*Reproducibility + 0.03*TreeScore + 0.02*Reviewedness
+
+        Total: 1.00 (100%)
+        """
+        weights = {
+            'ramp_up_time': 0.20,
+            'bus_factor': 0.15,
+            'performance_claims': 0.15,
+            'license_score': 0.15,
+            'size_score': 0.10,
+            'dataset_and_code_score': 0.10,
+            'dataset_quality': 0.10,
+            'code_quality': 0.05,
+            'reproducibility': 0.05,
+            'tree_score': 0.03,
+            'reviewedness': 0.02
+        }
+
+        weighted_sum = 0.0
+
+        for metric, score in metrics.items():
+            if isinstance(score, (int, float)):
+                weight = weights.get(metric, 0.0)
+                weighted_sum += score * weight
+
+        return weighted_sum
 
     def _extract_dependencies(self, minimal_files: Dict[str, bytes]) -> Tuple[Optional[str], Optional[str]]:
         """Extract dataset/code names from README"""
@@ -310,3 +501,104 @@ class AsyncIngestService:
             dataset_match.group(1) if dataset_match else None,
             code_match.group(1) if code_match else None
         )
+
+    def _compute_tree_score(self, artifact_id: int, minimal_files: Dict[str, bytes], repo_id: str) -> float:
+        """
+        Compute tree score: average of parent model net scores from lineage graph
+        """
+        import json
+        
+        try:
+            parent_model_id = None
+            if 'config.json' in minimal_files:
+                try:
+                    config = json.loads(minimal_files['config.json'].decode('utf-8'))
+                    for field in ['base_model_name_or_path', '_name_or_path', 'base_model']:
+                        if field in config and isinstance(config[field], str) and config[field]:
+                            parent_model_id = config[field]
+                            break
+                except Exception as e:
+                    logger.warning(f"Failed to parse config.json: {e}")
+            
+            if not parent_model_id:
+                return 0.5
+            
+            from api.models import Artifact
+            parent_name = parent_model_id.split('/')[-1] if '/' in parent_model_id else parent_model_id
+            
+            parent_artifact = Artifact.objects.filter(
+                type="model",
+                name__icontains=parent_name,
+                status="ready"
+            ).exclude(id=artifact_id).first()
+            
+            if parent_artifact and parent_artifact.net_score is not None:
+                logger.info(f"Found parent {parent_artifact.name} with net_score {parent_artifact.net_score}")
+                return parent_artifact.net_score
+            
+            return 0.5
+        except Exception as e:
+            logger.error(f"Tree score failed: {e}")
+            return 0.5
+
+    def _compute_reviewedness(self, minimal_files: Dict[str, bytes], repo_id: str, source_url: str) -> float:
+        """Compute reviewedness via GitHub API"""
+        import json
+        import requests
+        import re
+        
+        try:
+            score = 0.0
+            github_repo = None
+            
+            # Extract GitHub repo
+            if 'config.json' in minimal_files:
+                try:
+                    config = json.loads(minimal_files['config.json'].decode('utf-8'))
+                    for field in ['repository', 'repo', 'github']:
+                        if field in config and 'github.com' in str(config[field]):
+                            match = re.search(r'github\.com/([^/]+/[^/]+)', config[field])
+                            if match:
+                                github_repo = match.group(1).rstrip('.git')
+                                break
+                except:
+                    pass
+            
+            if not github_repo:
+                for filename in ['README.md', 'README.txt']:
+                    if filename in minimal_files:
+                        try:
+                            readme = minimal_files[filename].decode('utf-8', errors='ignore')
+                            match = re.search(r'github\.com/([a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+)', readme)
+                            if match:
+                                github_repo = match.group(1).rstrip('.git')
+                                break
+                        except:
+                            pass
+            
+            if github_repo:
+                github_token = os.getenv('GITHUB_TOKEN')
+                if github_token:
+                    headers = {'Authorization': f'token {github_token}', 'Accept': 'application/vnd.github.v3+json'}
+                    for branch in ['main', 'master']:
+                        url = f'https://api.github.com/repos/{github_repo}/branches/{branch}/protection'
+                        try:
+                            response = requests.get(url, headers=headers, timeout=5)
+                            if response.status_code == 200:
+                                protection = response.json()
+                                if 'required_pull_request_reviews' in protection:
+                                    score += 0.5
+                                    reviews = protection['required_pull_request_reviews']
+                                    if reviews.get('required_approving_review_count', 0) > 0:
+                                        score += 0.1
+                                    if reviews.get('dismiss_stale_reviews', False):
+                                        score += 0.1
+                                logger.info(f"GitHub review score for {github_repo}/{branch}: {score}")
+                                return min(score, 1.0)
+                        except:
+                            pass
+            
+            return max(score, 0.5)
+        except Exception as e:
+            logger.error(f"Reviewedness failed: {e}")
+            return 0.5

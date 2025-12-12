@@ -321,11 +321,16 @@ class S3ZeroDiskIngest:
 
     def download_minimal_for_metrics(self, repo_id: str, repo_type: str, revision: str) -> Dict[str, bytes]:
         """
-        Download ONLY minimal files needed for metrics (README, config)
+        Download minimal files + metadata needed for ALL metrics calculation
         Returns in-memory dict - NO files written to disk
 
+        Downloads:
+        - Files: README, config, tokenizer_config
+        - HuggingFace API metadata: repo info, commits, size
+        - File list for code quality analysis
+
         Returns:
-            Dict[filename, bytes] - all in memory
+            Dict with file contents + metadata - all in memory
         """
         hf_api = HfApi()
         files_to_download = ['README.md', 'README.txt', 'config.json', 'tokenizer_config.json']
@@ -333,6 +338,7 @@ class S3ZeroDiskIngest:
         result = {}
 
         try:
+            # 1. Download text files
             repo_files = hf_api.list_repo_files(
                 repo_id=repo_id,
                 repo_type=repo_type,
@@ -357,6 +363,72 @@ class S3ZeroDiskIngest:
 
                     except Exception as e:
                         logger.warning(f"Failed to download {filename}: {e}")
+
+            # 2. Fetch repo metadata (for size, license, bus factor)
+            try:
+                import json
+                repo_info = hf_api.repo_info(
+                    repo_id=repo_id,
+                    repo_type=repo_type,
+                    revision=revision
+                )
+
+                # Extract relevant metadata
+                metadata = {
+                    'size_mb': getattr(repo_info, 'size_bytes', 0) / (1024 * 1024) if hasattr(repo_info, 'size_bytes') else 0,
+                    'license': getattr(repo_info, 'cardData', {}).get('license') if hasattr(repo_info, 'cardData') else None,
+                    'last_modified': str(getattr(repo_info, 'lastModified', None)),
+                    'downloads': getattr(repo_info, 'downloads', 0),
+                    'likes': getattr(repo_info, 'likes', 0),
+                }
+                result['_hf_repo_metadata'] = json.dumps(metadata).encode('utf-8')
+                logger.debug(f"Fetched HF repo metadata: {metadata}")
+            except Exception as e:
+                logger.warning(f"Failed to fetch repo metadata: {e}")
+
+            # 3. Fetch commit history (for bus factor)
+            try:
+                import json
+                commits = list(hf_api.list_repo_commits(
+                    repo_id=repo_id,
+                    repo_type=repo_type,
+                    revision=revision
+                ))[:50]  # Last 50 commits
+
+                commit_data = []
+                unique_authors = set()
+                for commit in commits:
+                    commit_info = {
+                        'commit_id': commit.commit_id,
+                        'date': str(commit.created_at),
+                        'author': commit.author if hasattr(commit, 'author') else 'unknown',
+                        'title': commit.title if hasattr(commit, 'title') else ''
+                    }
+                    commit_data.append(commit_info)
+                    if hasattr(commit, 'author') and commit.author:
+                        unique_authors.add(commit.author)
+
+                result['_hf_commit_history'] = json.dumps(commit_data).encode('utf-8')
+                result['_hf_contributors_count'] = json.dumps({'count': len(unique_authors)}).encode('utf-8')
+                logger.debug(f"Fetched {len(commit_data)} commits, {len(unique_authors)} unique contributors")
+            except Exception as e:
+                logger.warning(f"Failed to fetch commit history: {e}")
+
+            # 4. Get file list structure (for code quality)
+            try:
+                import json
+                # Store file list with types (file/directory)
+                file_structure = []
+                for filepath in repo_files[:200]:  # Limit to first 200 files
+                    file_structure.append({
+                        'name': filepath.split('/')[-1],
+                        'path': filepath,
+                        'type': 'file'  # HF API doesn't distinguish, assume file
+                    })
+                result['_hf_file_structure'] = json.dumps(file_structure).encode('utf-8')
+                logger.debug(f"Stored file structure: {len(file_structure)} files")
+            except Exception as e:
+                logger.warning(f"Failed to store file structure: {e}")
 
         except Exception as e:
             logger.error(f"Failed to list repo files: {e}")
