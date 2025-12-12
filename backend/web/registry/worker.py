@@ -132,15 +132,25 @@ def process_local_queue(service: AsyncIngestService):
 
 def main():
     """Main worker entry point"""
-    service = AsyncIngestService()
+    try:
+        service = AsyncIngestService()
 
-    # Check if SQS is configured
-    if os.getenv('SQS_QUEUE_URL'):
-        logger.info("Using SQS queue")
-        process_sqs_messages(service)
-    else:
-        logger.info("SQS not configured, using local database polling")
-        process_local_queue(service)
+        # Check if SQS is configured
+        if os.getenv('SQS_QUEUE_URL'):
+            logger.info("Using SQS queue")
+            try:
+                process_sqs_messages(service)
+            except Exception as e:
+                logger.error(f"SQS worker failed, falling back to local queue: {e}")
+                # Fallback to local queue if SQS fails
+                process_local_queue(service)
+        else:
+            logger.info("SQS not configured, using local database polling")
+            process_local_queue(service)
+    except Exception as e:
+        logger.error(f"Worker failed to start: {e}")
+        # Sleep to prevent rapid restart loops
+        time.sleep(60)
 
 
 if __name__ == '__main__':

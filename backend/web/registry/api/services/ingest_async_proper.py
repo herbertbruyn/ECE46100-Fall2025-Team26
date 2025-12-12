@@ -107,16 +107,17 @@ class AsyncIngestService:
                     QueueUrl=self.queue_url,
                     MessageBody=json.dumps(job_data)
                 )
-                logger.info(f"Queued artifact {artifact_id} for async processing")
+                logger.info(f"Queued artifact {artifact_id} for async processing via SQS")
             except Exception as e:
-                logger.error(f"Failed to queue job: {e}")
-                # Mark as failed if we can't queue
-                with transaction.atomic():
-                    artifact.status = "failed"
-                    artifact.save()
-                return 500, {
-                    "error": "Failed to queue artifact for processing"
-                }
+                logger.error(f"Failed to send to SQS, falling back to threading: {e}")
+                # Fallback to threading if SQS fails
+                import threading
+                thread = threading.Thread(
+                    target=self._process_artifact_background,
+                    args=(job_data,)
+                )
+                thread.daemon = True
+                thread.start()
         else:
             # Fallback: use threading for local development
             logger.warning("SQS not configured, using thread for async processing")
