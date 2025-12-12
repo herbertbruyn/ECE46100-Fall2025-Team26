@@ -30,7 +30,7 @@ class AsyncIngestService:
 
         if self.queue_url:
             try:
-                self.sqs_client = boto3.client('sqs')
+                self.sqs_client = boto3.client('sqs', region_name=os.getenv('AWS_REGION'))
                 logger.info(f"Initialized SQS client with queue: {self.queue_url}")
             except Exception as e:
                 logger.error(f"Failed to initialize SQS client: {e}")
