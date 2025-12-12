@@ -5,20 +5,17 @@ This service NEVER uses EC2 disk - everything streams directly to S3:
 1. Stream HuggingFace files directly to S3 (no local download)
 2. Create ZIP in S3 using multipart upload with in-memory streaming
 3. Download ONLY minimal metadata files (README, config) for metrics (small <1MB)
-4. Queue requests to prevent concurrent ingests from overwhelming EC2
 
 Key improvements:
 - No temp files (except tiny README/config for metrics)
 - ZIP created entirely in S3 memory
-- Single-threaded ingest queue
+- Worker handles serialization (one artifact at a time)
 - Predictable resource usage
 """
 import os
 import io
 import logging
 import hashlib
-import threading
-import queue
 from typing import Dict, Tuple, Optional
 import boto3
 from botocore.exceptions import ClientError
@@ -26,58 +23,6 @@ from huggingface_hub import HfApi, hf_hub_url
 import requests
 
 logger = logging.getLogger(__name__)
-
-
-class IngestQueue:
-    """
-    Singleton queue to serialize ingest requests
-    Only one ingest runs at a time to prevent disk/RAM exhaustion
-    """
-    _instance = None
-    _lock = threading.Lock()
-
-    def __new__(cls):
-        if cls._instance is None:
-            with cls._lock:
-                if cls._instance is None:
-                    cls._instance = super().__new__(cls)
-                    cls._instance._initialized = False
-        return cls._instance
-
-    def __init__(self):
-        if self._initialized:
-            return
-        self._queue = queue.Queue()
-        self._current_artifact_id = None
-        self._initialized = True
-
-    def is_processing(self, artifact_id: int) -> bool:
-        """Check if this artifact is currently being processed"""
-        return self._current_artifact_id == artifact_id
-
-    def wait_for_turn(self, artifact_id: int):
-        """Wait until it's this artifact's turn to process"""
-        self._queue.put(artifact_id)
-        logger.info(f"Artifact {artifact_id} queued for processing. Queue size: {self._queue.qsize()}")
-
-        # Wait for our turn
-        while True:
-            if self._queue.empty():
-                break
-            next_id = self._queue.queue[0]  # Peek at front
-            if next_id == artifact_id:
-                self._current_artifact_id = artifact_id
-                break
-            # Sleep and wait
-            import time
-            time.sleep(1)
-
-    def release(self, artifact_id: int):
-        """Mark this artifact as done processing"""
-        if not self._queue.empty() and self._queue.queue[0] == artifact_id:
-            self._queue.get()
-        self._current_artifact_id = None
-        logger.info(f"Artifact {artifact_id} released from queue")
 
 
 class S3ZeroDiskIngest:
@@ -92,8 +37,6 @@ class S3ZeroDiskIngest:
 
         if not self.bucket:
             raise ValueError("AWS_STORAGE_BUCKET_NAME not configured")
-
-        self.queue = IngestQueue()
 
     def download_and_zip_to_s3_streaming(
         self,
@@ -111,53 +54,43 @@ class S3ZeroDiskIngest:
         Returns:
             Tuple of (sha256_hash, size_bytes)
         """
-        # Queue this ingest
-        if artifact_id:
-            self.queue.wait_for_turn(artifact_id)
+        logger.info(f"Starting zero-disk streaming ingest for {repo_id}")
 
+        hf_api = HfApi()
+
+        # Determine repo type
+        repo_type_map = {
+            'model': 'model',
+            'dataset': 'dataset',
+            'code': 'space'
+        }
+        repo_type = repo_type_map.get(artifact_type, 'model')
+
+        # Get list of files in repo
         try:
-            logger.info(f"Starting zero-disk streaming ingest for {repo_id}")
-
-            hf_api = HfApi()
-
-            # Determine repo type
-            repo_type_map = {
-                'model': 'model',
-                'dataset': 'dataset',
-                'code': 'space'
-            }
-            repo_type = repo_type_map.get(artifact_type, 'model')
-
-            # Get list of files in repo
-            try:
-                repo_files = hf_api.list_repo_files(
-                    repo_id=repo_id,
-                    repo_type=repo_type,
-                    revision=revision
-                )
-            except Exception as e:
-                logger.error(f"Failed to list HF repo files: {e}")
-                raise
-
-            logger.info(f"Found {len(repo_files)} files to process")
-
-            # Create ZIP in S3 using multipart upload with in-memory streaming
-            sha256_hash, total_size = self._create_streaming_zip_in_s3(
+            repo_files = hf_api.list_repo_files(
                 repo_id=repo_id,
                 repo_type=repo_type,
-                revision=revision,
-                file_list=repo_files,
-                output_key=output_zip_key
+                revision=revision
             )
+        except Exception as e:
+            logger.error(f"Failed to list HF repo files: {e}")
+            raise
 
-            logger.info(f"Zero-disk ZIP created: {output_zip_key} ({total_size} bytes)")
+        logger.info(f"Found {len(repo_files)} files to process")
 
-            return sha256_hash, total_size
+        # Create ZIP in S3 using multipart upload with in-memory streaming
+        sha256_hash, total_size = self._create_streaming_zip_in_s3(
+            repo_id=repo_id,
+            repo_type=repo_type,
+            revision=revision,
+            file_list=repo_files,
+            output_key=output_zip_key
+        )
 
-        finally:
-            # Release queue
-            if artifact_id:
-                self.queue.release(artifact_id)
+        logger.info(f"Zero-disk ZIP created: {output_zip_key} ({total_size} bytes)")
+
+        return sha256_hash, total_size
 
     def _create_streaming_zip_in_s3(
         self,
