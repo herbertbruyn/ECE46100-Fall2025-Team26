@@ -166,36 +166,48 @@ class AsyncIngestService:
         try:
             artifact = Artifact.objects.get(id=artifact_id)
 
-            # STEP 1: Rating
-            artifact.status = "rating_in_progress"
-            artifact.save()
-
+            # STEP 1: Rating (only for models)
             zero_disk = S3ZeroDiskIngest()
-
-            # Download minimal files for rating
             repo_id = self._parse_repo_id(source_url)
             repo_type_map = {'model': 'model', 'dataset': 'dataset', 'code': 'space'}
             repo_type = repo_type_map.get(artifact_type, 'model')
 
-            minimal_files = zero_disk.download_minimal_for_metrics(
-                repo_id=repo_id,
-                repo_type=repo_type,
-                revision=revision
-            )
+            metrics = None
+            net_score = None
+            minimal_files = None
 
-            # Compute metrics (pass artifact_id for tree_score)
-            metrics = self._compute_metrics(minimal_files, source_url, repo_id, artifact_id)
-            net_score = self._calculate_net_score(metrics)
+            if artifact_type == "model":
+                artifact.status = "rating_in_progress"
+                artifact.save()
 
-            # STEP 2: Quality gate check
-            if net_score < 0.5:
-                logger.warning(f"Artifact {artifact_id} disqualified: score {net_score} < 0.5")
-                with transaction.atomic():
-                    artifact.status = "disqualified"
-                    artifact.rating_scores = metrics
-                    artifact.net_score = net_score
-                    artifact.save()
-                return  # Don't ingest, artifact stays hidden (404)
+                # Download minimal files for rating
+                minimal_files = zero_disk.download_minimal_for_metrics(
+                    repo_id=repo_id,
+                    repo_type=repo_type,
+                    revision=revision
+                )
+
+                # Compute metrics (pass artifact_id for tree_score)
+                metrics = self._compute_metrics(minimal_files, source_url, repo_id, artifact_id)
+                net_score = self._calculate_net_score(metrics)
+
+                # STEP 2: Quality gate check - EACH metric must be >= 0.5
+                failed_metrics = []
+                for metric_name, metric_value in metrics.items():
+                    if metric_value < 0.5:
+                        failed_metrics.append(f"{metric_name}={metric_value:.2f}")
+
+                if failed_metrics:
+                    logger.warning(f"Artifact {artifact_id} disqualified: metrics below 0.5: {', '.join(failed_metrics)}")
+                    with transaction.atomic():
+                        artifact.status = "disqualified"
+                        artifact.rating_scores = metrics
+                        artifact.net_score = net_score
+                        artifact.save()
+                    return  # Don't ingest, artifact stays hidden (404)
+            else:
+                # For datasets/code, skip metrics evaluation entirely
+                logger.info(f"Skipping metrics evaluation for {artifact_type} artifact {artifact_id}")
 
             # STEP 3: Ingest artifact to S3
             artifact.status = "ingesting"
@@ -224,7 +236,7 @@ class AsyncIngestService:
                 artifact.net_score = net_score
 
                 # Dataset/code linking for models
-                if artifact_type == "model":
+                if artifact_type == "model" and minimal_files:
                     dataset_name, code_name = self._extract_dependencies(minimal_files)
                     if dataset_name or code_name:
                         from api.models import find_or_create_dataset, find_or_create_code
@@ -234,6 +246,39 @@ class AsyncIngestService:
                         if code_name:
                             artifact.code_name = code_name
                             artifact.code = find_or_create_code(code_name)
+
+                # Reverse linking: if this is a dataset/code, link any existing models that reference it
+                if artifact_type == "dataset":
+                    # Find models that have this dataset name in their dataset_name field
+                    from api.models import find_or_create_dataset
+                    dataset_obj = find_or_create_dataset(artifact.name)
+
+                    # Update all models that reference this dataset by name
+                    models_to_link = Artifact.objects.filter(
+                        type="model",
+                        dataset_name__icontains=artifact.name,
+                        dataset__isnull=True  # Only link models that don't already have a dataset linked
+                    )
+                    for model_artifact in models_to_link:
+                        model_artifact.dataset = dataset_obj
+                        model_artifact.save()
+                        logger.info(f"Reverse-linked model {model_artifact.id} to dataset {artifact.id}")
+
+                elif artifact_type == "code":
+                    # Find models that have this code name in their code_name field
+                    from api.models import find_or_create_code
+                    code_obj = find_or_create_code(artifact.name)
+
+                    # Update all models that reference this code by name
+                    models_to_link = Artifact.objects.filter(
+                        type="model",
+                        code_name__icontains=artifact.name,
+                        code__isnull=True  # Only link models that don't already have a code linked
+                    )
+                    for model_artifact in models_to_link:
+                        model_artifact.code = code_obj
+                        model_artifact.save()
+                        logger.info(f"Reverse-linked model {model_artifact.id} to code {artifact.id}")
 
                 artifact.save()
 
