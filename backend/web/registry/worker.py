@@ -117,8 +117,17 @@ def process_local_queue(service: AsyncIngestService):
                     'uploaded_by_id': artifact.uploaded_by.id if artifact.uploaded_by else None
                 }
 
-                service._process_artifact_background(job_data)
-                logger.info(f"Completed artifact {artifact.id}")
+                try:
+                    service._process_artifact_background(job_data)
+                    logger.info(f"Completed artifact {artifact.id}")
+                except Exception as e:
+                    logger.error(f"Failed to process artifact {artifact.id}: {e}")
+                    # Mark as failed and continue
+                    try:
+                        artifact.status = "failed"
+                        artifact.save()
+                    except:
+                        pass
 
             time.sleep(5)  # Poll every 5 seconds
 
