@@ -141,17 +141,36 @@ def reset_registry(request):
             bucket = os.getenv('AWS_STORAGE_BUCKET_NAME')
 
             if bucket:
-                for artifact in Artifact.objects.all():
-                    # Delete from S3
-                    if artifact.s3_key:
-                        try:
-                            s3_client.delete_object(Bucket=bucket, Key=artifact.s3_key)
-                            deleted_s3 += 1
-                            logging.info(f"Deleted S3 object: {artifact.s3_key}")
-                        except ClientError as e:
-                            logging.warning(f"Failed to delete S3 object {artifact.s3_key}: {e}")
+                # Method 1: Delete all objects with 'artifacts/' prefix (comprehensive cleanup)
+                # This catches orphaned files and ensures complete cleanup
+                try:
+                    # List all objects under artifacts/ prefix
+                    paginator = s3_client.get_paginator('list_objects_v2')
+                    pages = paginator.paginate(Bucket=bucket, Prefix='artifacts/')
 
-                    # Also delete local blob if exists
+                    for page in pages:
+                        if 'Contents' in page:
+                            # Delete in batches of up to 1000 (S3 limit)
+                            objects_to_delete = [{'Key': obj['Key']} for obj in page['Contents']]
+
+                            if objects_to_delete:
+                                response = s3_client.delete_objects(
+                                    Bucket=bucket,
+                                    Delete={'Objects': objects_to_delete}
+                                )
+                                deleted_s3 += len(response.get('Deleted', []))
+
+                                if 'Errors' in response:
+                                    for error in response['Errors']:
+                                        logging.warning(f"Failed to delete {error['Key']}: {error['Message']}")
+
+                    logging.info(f"Deleted {deleted_s3} objects from S3 bucket {bucket}")
+
+                except ClientError as e:
+                    logging.error(f"S3 cleanup failed: {e}")
+
+                # Also delete local blobs if they exist
+                for artifact in Artifact.objects.all():
                     if artifact.blob:
                         artifact.blob.delete(save=False)
                         deleted_local += 1
