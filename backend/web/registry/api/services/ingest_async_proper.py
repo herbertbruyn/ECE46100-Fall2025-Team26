@@ -53,7 +53,9 @@ class AsyncIngestService:
             - 403: Auth failure
             - 409: Duplicate artifact
         """
-        logger.info(f"Async ingest request for {source_url} (type: {artifact_type})")
+        logger.info(f"=" * 80)
+        logger.info(f"INGEST REQUEST: type={artifact_type}, url={source_url}")
+        logger.info(f"=" * 80)
 
         # Validate artifact_type
         valid_types = ['model', 'dataset', 'code']
@@ -65,9 +67,12 @@ class AsyncIngestService:
         # Parse repo_id from source_url
         repo_id = self._parse_repo_id(source_url)
         if not repo_id:
+            logger.error(f"PARSE FAILED: Could not extract repo_id from URL: {source_url}")
             return 400, {
                 "error": "Invalid HuggingFace URL"
             }
+
+        logger.info(f"PARSED: repo_id='{repo_id}' from url='{source_url}'")
 
         # Check for duplicates (only READY artifacts count as duplicates)
         existing = Artifact.objects.filter(
@@ -76,7 +81,7 @@ class AsyncIngestService:
         ).first()
 
         if existing:
-            logger.warning(f"Duplicate artifact: {source_url} already exists as ID {existing.id}")
+            logger.warning(f"DUPLICATE: {artifact_type} '{repo_id}' already exists as artifact #{existing.id} (status={existing.status})")
             return 409, {
                 "error": "Artifact exists already",
                 "existing_id": existing.id
@@ -139,6 +144,8 @@ class AsyncIngestService:
 
         # Return 202 Accepted with artifact metadata
         # Per spec: download_url is not yet available
+        logger.info(f"ACCEPTED: Created artifact #{artifact.id} ({artifact_type} '{repo_id}') - status=pending_rating")
+        logger.info(f"=" * 80)
         return 202, {
             "metadata": {
                 "name": artifact.name,
@@ -166,6 +173,12 @@ class AsyncIngestService:
         try:
             artifact = Artifact.objects.get(id=artifact_id)
 
+            logger.info(f"")
+            logger.info(f"{'='*80}")
+            logger.info(f"WORKER PROCESSING: Artifact #{artifact_id} ({artifact_type})")
+            logger.info(f"  URL: {source_url}")
+            logger.info(f"{'='*80}")
+
             # STEP 1: Rating (only for models)
             zero_disk = S3ZeroDiskIngest()
             repo_id = self._parse_repo_id(source_url)
@@ -177,6 +190,7 @@ class AsyncIngestService:
             minimal_files = None
 
             if artifact_type == "model":
+                logger.info(f"RATING: Starting metrics evaluation for model #{artifact_id}")
                 artifact.status = "rating_in_progress"
                 artifact.save()
 
@@ -198,18 +212,25 @@ class AsyncIngestService:
                         failed_metrics.append(f"{metric_name}={metric_value:.2f}")
 
                 if failed_metrics:
-                    logger.warning(f"Artifact {artifact_id} disqualified: metrics below 0.5: {', '.join(failed_metrics)}")
+                    logger.warning(f"DISQUALIFIED: Artifact #{artifact_id} failed quality gate!")
+                    logger.warning(f"  Net score: {net_score:.3f}")
+                    logger.warning(f"  Failed metrics: {', '.join(failed_metrics)}")
+                    logger.warning(f"{'='*80}")
                     with transaction.atomic():
                         artifact.status = "disqualified"
                         artifact.rating_scores = metrics
                         artifact.net_score = net_score
                         artifact.save()
                     return  # Don't ingest, artifact stays hidden (404)
+
+                logger.info(f"PASSED QUALITY GATE: All metrics >= 0.5, net_score={net_score:.3f}")
             else:
                 # For datasets/code, skip metrics evaluation entirely
-                logger.info(f"Skipping metrics evaluation for {artifact_type} artifact {artifact_id}")
+                logger.info(f"SKIP RATING: {artifact_type} artifacts don't require metrics evaluation")
 
             # STEP 3: Ingest artifact to S3
+            is_github = 'github.com' in source_url
+            logger.info(f"INGESTING: Streaming {'GitHub' if is_github else 'HuggingFace'} repo to S3...")
             artifact.status = "ingesting"
             artifact.save()
 
@@ -219,7 +240,8 @@ class AsyncIngestService:
                 artifact_type=artifact_type,
                 output_zip_key=s3_key,
                 revision=revision,
-                artifact_id=artifact_id
+                artifact_id=artifact_id,
+                source_url=source_url  # Pass source_url to detect GitHub vs HF
             )
 
             # Generate presigned URL
@@ -282,10 +304,15 @@ class AsyncIngestService:
 
                 artifact.save()
 
-            logger.info(f"Artifact {artifact_id} ready!")
+            logger.info(f"SUCCESS: Artifact #{artifact_id} ({artifact_type} '{repo_id}') is now READY!")
+            logger.info(f"  Size: {total_size:,} bytes, SHA256: {sha256_hash[:16]}...")
+            logger.info(f"  Download URL: {download_url[:80]}..." if download_url and len(download_url) > 80 else f"  Download URL: {download_url}")
+            logger.info(f"{'='*80}")
 
         except Exception as e:
-            logger.error(f"Background processing failed for artifact {artifact_id}: {e}")
+            logger.error(f"FAILED: Artifact #{artifact_id} ({artifact_type}) processing failed!")
+            logger.error(f"  Error: {str(e)}")
+            logger.error(f"{'='*80}")
             try:
                 artifact = Artifact.objects.get(id=artifact_id)
                 artifact.status = "failed"
@@ -294,13 +321,24 @@ class AsyncIngestService:
                 pass
 
     def _parse_repo_id(self, source_url: str) -> Optional[str]:
-        """Extract repo_id from HuggingFace URL"""
+        """Extract repo_id from HuggingFace or GitHub URL"""
         url = source_url.rstrip('/')
+
+        # Handle HuggingFace URLs
         if 'huggingface.co/' in url:
             parts = url.split('huggingface.co/')[-1].split('/')
             if parts[0] in ['datasets', 'spaces']:
                 return '/'.join(parts[1:])
             return '/'.join(parts)
+
+        # Handle GitHub URLs for code artifacts
+        if 'github.com/' in url:
+            parts = url.split('github.com/')[-1].split('/')
+            # GitHub URLs are typically: github.com/owner/repo
+            if len(parts) >= 2:
+                return f"{parts[0]}/{parts[1]}"
+            return None
+
         return None
 
     def _compute_metrics(self, minimal_files: Dict[str, bytes], source_url: str, repo_id: str, artifact_id: int) -> Dict:

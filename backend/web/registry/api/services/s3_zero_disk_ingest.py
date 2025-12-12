@@ -44,7 +44,8 @@ class S3ZeroDiskIngest:
         artifact_type: str,
         output_zip_key: str,
         revision: str = "main",
-        artifact_id: int = None
+        artifact_id: int = None,
+        source_url: str = None
     ) -> Tuple[str, int]:
         """
         Download HuggingFace repo and create ZIP entirely in S3 with NO disk usage
@@ -55,6 +56,12 @@ class S3ZeroDiskIngest:
             Tuple of (sha256_hash, size_bytes)
         """
         logger.info(f"Starting zero-disk streaming ingest for {repo_id}")
+
+        # Check if this is a GitHub repo (for code artifacts)
+        is_github = source_url and 'github.com' in source_url
+
+        if is_github:
+            return self._download_github_repo_to_s3(repo_id, output_zip_key, revision)
 
         hf_api = HfApi()
 
@@ -434,6 +441,115 @@ class S3ZeroDiskIngest:
             logger.error(f"Failed to list repo files: {e}")
 
         return result
+
+    def _download_github_repo_to_s3(self, repo_id: str, output_zip_key: str, revision: str = "main") -> Tuple[str, int]:
+        """
+        Download GitHub repository ZIP and stream directly to S3 (zero-disk)
+
+        Args:
+            repo_id: GitHub repo in format "owner/repo"
+            output_zip_key: S3 key for the output ZIP
+            revision: Git branch/tag (default: "main")
+
+        Returns:
+            Tuple of (sha256_hash, size_bytes)
+        """
+        logger.info(f"Streaming GitHub repo to S3: {repo_id} (branch: {revision})")
+
+        # GitHub provides ZIP archives at: https://github.com/owner/repo/archive/refs/heads/branch.zip
+        github_zip_url = f"https://github.com/{repo_id}/archive/refs/heads/{revision}.zip"
+
+        upload_id = None  # Initialize before try block for error handling
+        try:
+            # Stream download from GitHub
+            response = requests.get(github_zip_url, stream=True, timeout=300)
+            response.raise_for_status()
+
+            # Initialize multipart upload to S3
+            upload_id = self.s3_client.create_multipart_upload(
+                Bucket=self.bucket,
+                Key=output_zip_key,
+                ContentType='application/zip'
+            )['UploadId']
+
+            parts = []
+            part_number = 1
+            buffer = bytearray()
+            sha256_hash = hashlib.sha256()
+            total_size = 0
+            chunk_size = 10 * 1024 * 1024  # 10MB chunks
+
+            # Stream data in chunks
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    buffer.extend(chunk)
+                    sha256_hash.update(chunk)
+                    total_size += len(chunk)
+
+                    # Upload when buffer reaches chunk_size
+                    if len(buffer) >= chunk_size:
+                        part_response = self.s3_client.upload_part(
+                            Bucket=self.bucket,
+                            Key=output_zip_key,
+                            PartNumber=part_number,
+                            UploadId=upload_id,
+                            Body=bytes(buffer)
+                        )
+                        parts.append({'PartNumber': part_number, 'ETag': part_response['ETag']})
+                        logger.debug(f"Uploaded part {part_number} ({len(buffer)} bytes)")
+                        buffer = bytearray()
+                        part_number += 1
+
+            # Upload final buffer
+            if buffer:
+                part_response = self.s3_client.upload_part(
+                    Bucket=self.bucket,
+                    Key=output_zip_key,
+                    PartNumber=part_number,
+                    UploadId=upload_id,
+                    Body=bytes(buffer)
+                )
+                parts.append({'PartNumber': part_number, 'ETag': part_response['ETag']})
+                logger.debug(f"Uploaded final part {part_number} ({len(buffer)} bytes)")
+
+            # Complete multipart upload
+            self.s3_client.complete_multipart_upload(
+                Bucket=self.bucket,
+                Key=output_zip_key,
+                UploadId=upload_id,
+                MultipartUpload={'Parts': parts}
+            )
+
+            digest = sha256_hash.hexdigest()
+            logger.info(f"GitHub repo streamed to S3: {total_size} bytes, SHA256: {digest[:16]}...")
+            return digest, total_size
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to download GitHub repo {repo_id}: {e}")
+            # Abort multipart upload if it was started
+            if upload_id:
+                try:
+                    self.s3_client.abort_multipart_upload(
+                        Bucket=self.bucket,
+                        Key=output_zip_key,
+                        UploadId=upload_id
+                    )
+                except:
+                    pass
+            raise RuntimeError(f"GitHub download failed: {e}")
+        except Exception as e:
+            logger.error(f"Failed to stream GitHub repo: {e}")
+            # Abort multipart upload if it was started
+            if upload_id:
+                try:
+                    self.s3_client.abort_multipart_upload(
+                        Bucket=self.bucket,
+                        Key=output_zip_key,
+                        UploadId=upload_id
+                    )
+                except:
+                    pass
+            raise
 
     def get_s3_presigned_url(self, s3_key: str, expiration: int = 3600) -> str:
         """Generate presigned URL for downloading"""
