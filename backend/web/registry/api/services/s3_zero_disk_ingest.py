@@ -127,7 +127,7 @@ class S3ZeroDiskIngest:
             import zipfile
 
             with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                for idx, file_path in file_list:
+                for idx, file_path in enumerate(file_list):
                     logger.info(f"Processing file {idx+1}/{len(file_list)}: {file_path}")  # ADD THIS
 
                     try:
