@@ -189,11 +189,17 @@ class Artifact(models.Model):
     ]
     
     STATUS_CHOICES = [
+        ("pending_rating", "Pending Rating"),      # 202 returned, waiting for worker
+        ("rating_in_progress", "Rating In Progress"),  # Worker is rating
+        ("disqualified", "Disqualified"),          # Failed quality gate (< 0.5)
+        ("ingesting", "Ingesting Artifact"),       # Passed rating, downloading to S3
+        ("ready", "Ready"),                        # Fully ingested and available
+        ("failed", "Failed"),                      # Hard error during processing
+        # Legacy statuses for backward compatibility
         ("pending", "Pending"),
         ("downloading", "Downloading"),
         ("rating", "Rating"),
         ("completed", "Completed"),
-        ("failed", "Failed"),
         ("rejected", "Rejected"),
     ]
 
