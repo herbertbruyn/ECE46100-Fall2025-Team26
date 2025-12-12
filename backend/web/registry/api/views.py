@@ -116,7 +116,6 @@ def reset_registry(request):
     """DELETE /reset - Reset registry to default state"""
     import boto3
     from botocore.exceptions import ClientError
-    from django.conf import settings
 
     # Perform reset
     try:
@@ -131,55 +130,59 @@ def reset_registry(request):
         # Delete files (both local blob and S3)
         deleted_local = 0
         deleted_s3 = 0
+        s3_error = None
 
-        # Check if using S3
-        use_s3 = getattr(settings, 'USE_S3', False) or os.getenv('USE_S3', 'false').lower() == 'true'
+        # Always try to clean S3 if bucket is configured
+        bucket = os.getenv('AWS_STORAGE_BUCKET_NAME')
 
-        if use_s3:
-            # Initialize S3 client
-            s3_client = boto3.client('s3')
-            bucket = os.getenv('AWS_STORAGE_BUCKET_NAME')
+        if bucket:
+            logging.info(f"Attempting S3 cleanup for bucket: {bucket}")
+            try:
+                # Initialize S3 client
+                s3_client = boto3.client('s3')
 
-            if bucket:
-                # Method 1: Delete all objects with 'artifacts/' prefix (comprehensive cleanup)
-                # This catches orphaned files and ensures complete cleanup
-                try:
-                    # List all objects under artifacts/ prefix
-                    paginator = s3_client.get_paginator('list_objects_v2')
-                    pages = paginator.paginate(Bucket=bucket, Prefix='artifacts/')
+                # List all objects under artifacts/ prefix
+                paginator = s3_client.get_paginator('list_objects_v2')
+                pages = paginator.paginate(Bucket=bucket, Prefix='artifacts/')
 
-                    for page in pages:
-                        if 'Contents' in page:
-                            # Delete in batches of up to 1000 (S3 limit)
-                            objects_to_delete = [{'Key': obj['Key']} for obj in page['Contents']]
+                objects_found = 0
+                for page in pages:
+                    if 'Contents' in page:
+                        objects_found += len(page['Contents'])
+                        # Delete in batches of up to 1000 (S3 limit)
+                        objects_to_delete = [{'Key': obj['Key']} for obj in page['Contents']]
 
-                            if objects_to_delete:
-                                response = s3_client.delete_objects(
-                                    Bucket=bucket,
-                                    Delete={'Objects': objects_to_delete}
-                                )
-                                deleted_s3 += len(response.get('Deleted', []))
+                        if objects_to_delete:
+                            logging.info(f"Deleting {len(objects_to_delete)} objects from S3...")
+                            response = s3_client.delete_objects(
+                                Bucket=bucket,
+                                Delete={'Objects': objects_to_delete}
+                            )
+                            deleted_s3 += len(response.get('Deleted', []))
 
-                                if 'Errors' in response:
-                                    for error in response['Errors']:
-                                        logging.warning(f"Failed to delete {error['Key']}: {error['Message']}")
+                            if 'Errors' in response:
+                                for error in response['Errors']:
+                                    logging.warning(f"Failed to delete {error['Key']}: {error['Message']}")
 
-                    logging.info(f"Deleted {deleted_s3} objects from S3 bucket {bucket}")
+                logging.info(f"S3 cleanup complete: found {objects_found} objects, deleted {deleted_s3}")
 
-                except ClientError as e:
-                    logging.error(f"S3 cleanup failed: {e}")
-
-                # Also delete local blobs if they exist
-                for artifact in Artifact.objects.all():
-                    if artifact.blob:
-                        artifact.blob.delete(save=False)
-                        deleted_local += 1
+            except ClientError as e:
+                s3_error = str(e)
+                logging.error(f"S3 cleanup failed: {e}")
+            except Exception as e:
+                s3_error = str(e)
+                logging.error(f"Unexpected S3 error: {e}")
         else:
-            # Local storage only
-            for artifact in Artifact.objects.all():
-                if artifact.blob:
+            logging.warning("AWS_STORAGE_BUCKET_NAME not set, skipping S3 cleanup")
+
+        # Delete local blobs if they exist
+        for artifact in Artifact.objects.all():
+            if artifact.blob:
+                try:
                     artifact.blob.delete(save=False)
                     deleted_local += 1
+                except Exception as e:
+                    logging.warning(f"Failed to delete local blob: {e}")
 
         # Delete database records
         with transaction.atomic():
@@ -188,14 +191,18 @@ def reset_registry(request):
             Dataset.objects.all().delete()
             Code.objects.all().delete()
 
-        return Response({
+        response_data = {
             "detail": "Registry is reset",
             "deleted": {
                 **counts,
-                "local_files": deleted_local,
                 "s3_objects": deleted_s3
             }
-        }, status=200)
+        }
+
+        if s3_error:
+            response_data["s3_error"] = s3_error
+
+        return Response(response_data, status=200)
 
     except Exception as e:
         logging.error(f"Reset failed: {e}")
