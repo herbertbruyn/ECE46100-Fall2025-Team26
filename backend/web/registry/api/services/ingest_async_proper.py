@@ -27,6 +27,7 @@ class AsyncIngestService:
         # Initialize SQS client for job queue
         self.sqs_client = None
         self.queue_url = os.getenv('SQS_QUEUE_URL')
+        self.use_worker = os.getenv('USE_BACKGROUND_WORKER', 'true').lower() == 'true'
 
         if self.queue_url:
             try:
@@ -34,6 +35,7 @@ class AsyncIngestService:
                 logger.info(f"Initialized SQS client with queue: {self.queue_url}")
             except Exception as e:
                 logger.error(f"Failed to initialize SQS client: {e}")
+                self.sqs_client = None
 
     def ingest_artifact(
         self,
@@ -107,19 +109,27 @@ class AsyncIngestService:
                     QueueUrl=self.queue_url,
                     MessageBody=json.dumps(job_data)
                 )
-                logger.info(f"Queued artifact {artifact_id} for async processing")
+                logger.info(f"Queued artifact {artifact_id} for async processing via SQS")
             except Exception as e:
-                logger.error(f"Failed to queue job: {e}")
-                # Mark as failed if we can't queue
-                with transaction.atomic():
-                    artifact.status = "failed"
-                    artifact.save()
-                return 500, {
-                    "error": "Failed to queue artifact for processing"
-                }
+                logger.error(f"Failed to send to SQS: {e}")
+                # If worker is running, it will pick this up from DB (don't spawn thread)
+                if not self.use_worker:
+                    logger.warning("No worker process, falling back to threading")
+                    import threading
+                    thread = threading.Thread(
+                        target=self._process_artifact_background,
+                        args=(job_data,)
+                    )
+                    thread.daemon = True
+                    thread.start()
+                else:
+                    logger.info("Worker will pick up artifact from database")
+        elif self.use_worker:
+            # Worker is running, it will poll database for pending_rating artifacts
+            logger.info(f"Queued artifact {artifact_id} for worker (database polling)")
         else:
-            # Fallback: use threading for local development
-            logger.warning("SQS not configured, using thread for async processing")
+            # No SQS, no worker - use threading as last resort
+            logger.warning("No SQS or worker, using thread for async processing")
             import threading
             thread = threading.Thread(
                 target=self._process_artifact_background,
