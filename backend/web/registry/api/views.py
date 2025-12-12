@@ -30,7 +30,7 @@ except Exception:
 # Import models
 from .models import Artifact, Dataset, Code, ModelRating
 
-from .serializers import ArtifactCreateSerializer, ArtifactRegexSerializer
+from .serializers import ArtifactCreateSerializer, ArtifactRegexSerializer, ArtifactLicenseCheckSerializer
 
 # Import the ingest service based on configuration
 try:
@@ -589,3 +589,72 @@ def artifact_lineage(request, id: int):
         "nodes": nodes,
         "edges": edges
     }, status=200)
+
+@api_view(["POST"])
+# @require_auth
+def artifact_license_check(request, id: int):
+    """
+    POST /artifact/model/{id}/license-check
+    Assess license compatibility between a Model artifact and a GitHub repository.
+    """
+    # Validate Input using the serializer
+    ser = ArtifactLicenseCheckSerializer(data=request.data)
+    if not ser.is_valid():
+        return Response({"detail": "Invalid request data"}, status=400)
+    
+    github_url = ser.validated_data["github_url"]
+
+    # Retrieve the Artifact
+    obj = get_object_or_404(Artifact, pk=id, type="model")
+    
+    # Check for API Managers
+    if not hf or not gh:
+        return Response({"detail": "External API managers not configured"}, status=500)
+
+    try:
+        # Derive ID from the stored source_url
+        model_repo_id = derive_name("model", obj.source_url)
+        model_info = hf.get_model_info(model_repo_id)
+        
+        model_license = "unknown"
+        # Try tags (standard HF location)
+        if model_info.tags:
+            for tag in model_info.tags:
+                if tag.startswith("license:"):
+                    model_license = tag.split(":", 1)[1].lower()
+                    break
+        # Try cardData (fallback)
+        if model_license == "unknown" and hasattr(model_info, "cardData") and model_info.cardData:
+            model_license = model_info.cardData.get("license", "unknown").lower()
+
+        owner, repo_name = gh.code_link_to_repo(github_url)
+        repo_info = gh.get_repo_info(owner, repo_name)
+        
+        github_license_info = repo_info.get("license")
+        github_license = github_license_info.get("key").lower() if github_license_info else "unknown"
+
+        # Normalize
+        model_lic = model_license.strip().lower()
+        github_lic = github_license.strip().lower()
+
+        # Define license sets
+        permissive = {"mit", "apache-2.0", "bsd-3-clause", "bsd-2-clause", "cc0-1.0", "unlicense"}
+        copyleft = {"gpl-3.0", "gpl-2.0", "agpl-3.0", "lgpl-3.0", "cc-by-sa-4.0"}
+        
+        is_compatible = False
+
+        # Exact match is compatible
+        if model_lic == github_lic and model_lic != "unknown":
+            is_compatible = True
+        # Permissive models are safe to use in any code
+        elif model_lic in permissive:
+            is_compatible = True
+        # Copyleft models are compatible with Copyleft code
+        elif model_lic in copyleft and github_lic in copyleft:
+             is_compatible = True
+        
+        return Response(is_compatible, status=200)
+
+    except Exception as e:
+        logging.error(f"License check failed: {e}")
+        return Response({"detail": f"Could not retrieve license info: {str(e)}"}, status=502)

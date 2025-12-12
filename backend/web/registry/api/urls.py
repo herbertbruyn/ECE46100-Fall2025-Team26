@@ -39,5 +39,8 @@ urlpatterns = [
     ),
 
     # Lineage endpoint
-    path("artifact/model/<int:id>/lineage", views.artifact_lineage)
+    path("artifact/model/<int:id>/lineage", views.artifact_lineage),
+
+    # License check endpoint
+    path("artifact/model/<int:id>/license-check", views.artifact_license_check)
 ]

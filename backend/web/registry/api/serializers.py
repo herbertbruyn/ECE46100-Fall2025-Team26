@@ -5,3 +5,6 @@ class ArtifactCreateSerializer(serializers.Serializer):
 
 class ArtifactRegexSerializer(serializers.Serializer):
     regex = serializers.CharField()  # body must be {"regex":"..."}
+
+class ArtifactLicenseCheckSerializer(serializers.Serializer):
+    github_url = serializers.URLField()
