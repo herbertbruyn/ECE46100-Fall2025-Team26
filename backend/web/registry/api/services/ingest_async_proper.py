@@ -73,7 +73,6 @@ class AsyncIngestService:
         existing = Artifact.objects.filter(
             source_url=source_url,
             type=artifact_type,
-            status="ready"
         ).first()
 
         if existing:
