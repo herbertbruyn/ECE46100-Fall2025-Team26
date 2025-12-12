@@ -51,7 +51,7 @@ def process_sqs_messages(service: AsyncIngestService):
                 QueueUrl=queue_url,
                 MaxNumberOfMessages=1,
                 WaitTimeSeconds=20,  # Long polling
-                VisibilityTimeout=600  # 10 minutes to process
+                VisibilityTimeout=1800  # 10 minutes to process
             )
 
             messages = response.get('Messages', [])

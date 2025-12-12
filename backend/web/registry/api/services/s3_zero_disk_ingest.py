@@ -128,6 +128,8 @@ class S3ZeroDiskIngest:
 
             with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zipf:
                 for file_path in file_list:
+                    logger.info(f"Processing file {idx+1}/{len(file_list)}: {file_path}")  # ADD THIS
+
                     try:
                         # Get download URL
                         url = hf_hub_url(
@@ -151,6 +153,7 @@ class S3ZeroDiskIngest:
 
                         # Add to ZIP in memory
                         zipf.writestr(file_path, file_content)
+                        logger.info(f"✓ Added {file_path} to ZIP ({len(file_content)} bytes)")  # ADD THIS
 
                         # Update hash
                         sha256_hash.update(file_content)
