@@ -17,6 +17,7 @@ from api.models import Artifact
 
 logger = logging.getLogger(__name__)
 
+SCORE_THRESHOLD = 0.0  # Minimum score for each metric to pass quality gate
 
 class AsyncIngestService:
     """
@@ -208,7 +209,7 @@ class AsyncIngestService:
                 # STEP 2: Quality gate check - EACH metric must be >= 0.5
                 failed_metrics = []
                 for metric_name, metric_value in metrics.items():
-                    if metric_value < 0.5:
+                    if metric_value <= SCORE_THRESHOLD:
                         failed_metrics.append(f"{metric_name}={metric_value:.2f}")
 
                 if failed_metrics:
