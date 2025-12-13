@@ -19,12 +19,12 @@ urlpatterns = [
         views.artifact_create
     ),
     re_path(
-        r"^artifacts/(?P<artifact_type>(model|dataset|code))/(?P<id>\d+)$",
+        r"^artifacts/(?P<artifact_type>(model|dataset|code))/(?P<id>[^/]+)$",
         views.artifact_details
     ),
     
     # Rating endpoint
-    path("artifact/model/<int:id>/rate", views.model_rate),
+    path("artifact/model/<str:id>/rate", views.model_rate),
     
     # List endpoint
     path("artifacts", views.artifacts_list),
@@ -34,13 +34,13 @@ urlpatterns = [
     
     # Cost endpoint
     re_path(
-        r"^artifact/(?P<artifact_type>(model|dataset|code))/(?P<id>\d+)/cost$",
+        r"^artifact/(?P<artifact_type>(model|dataset|code))/(?P<id>[^/]+)/cost$",
         views.artifact_cost
     ),
 
     # Lineage endpoint
-    path("artifact/model/<int:id>/lineage", views.artifact_lineage),
+    path("artifact/model/<str:id>/lineage", views.artifact_lineage),
 
     # License check endpoint
-    path("artifact/model/<int:id>/license-check", views.artifact_license_check)
+    path("artifact/model/<str:id>/license-check", views.artifact_license_check)
 ]
