@@ -152,7 +152,7 @@ class AsyncIngestService:
         return 202, {
             "metadata": {
                 "name": artifact.name,
-                "id": str(artifact.id),
+                "id": artifact.id,
                 "type": artifact.type
             },
             "data": {

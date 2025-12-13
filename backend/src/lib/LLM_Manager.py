@@ -50,7 +50,7 @@ class LLMManager:
         }
         
         try:
-            response = requests.post(url, headers=headers, json=body, timeout=30)
+            response = requests.post(url, headers=headers, json=body)
             if response.status_code == 200:
                 # Parse the JSON response
                 response_data = response.json()
@@ -61,7 +61,6 @@ class LLMManager:
                     message = choices[0].get("message", {})
                     content = message.get("content", "")
                 else:
-                    logging.warning("No choices in LLM response")
                     content = ""
                 
                 # Extract usage stats if available
@@ -79,12 +78,8 @@ class LLMManager:
                     finish_reason=finish_reason
                 )
             else:
-                logging.error(f"LLM API error: {response.status_code}, {response.text}")
                 raise Exception(f"Error: {response.status_code}, "
                                 f"{response.text}")
-        except requests.Timeout:
-            logging.error("LLM API call timed out after 30 seconds")
-            raise RuntimeError("LLM API call timed out")
         except Exception as e:
             logging.error(f"Purdue LLM API call failed: {e}")
             raise RuntimeError(f"Failed to call Purdue LLM API: {e}")
