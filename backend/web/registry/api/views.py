@@ -427,7 +427,8 @@ def artifact_by_regex(request):
     except re.error:
         return Response({"detail": "invalid regex"}, status=400)
 
-    results = [a.metadata_view() for a in Artifact.objects.all() if rx.search(a.name)]
+    # Only return ready artifacts (exclude disqualified, failed, rejected, and in-progress)
+    results = [a.metadata_view() for a in Artifact.objects.filter(status="ready") if rx.search(a.name)]
     if not results:
         return Response({"detail": "No artifact found under this regex."}, status=404)
     return Response(results, status=200)
@@ -449,19 +450,12 @@ def artifacts_list(request):
         name = query.get("name", "*")
         artifact_type = query.get("type")
 
-        valid_statuses = [
-            "pending_rating",      
-            "rating_in_progress",
-            "ingesting",         
-            "ready",               
-            "pending",             
-            "downloading",         
-            "rating",              
-            "completed"            
-        ]
-        
+        # Only return artifacts that are fully processed and available
+        # Exclude: disqualified, failed, rejected, and in-progress statuses
+        valid_statuses = ["ready", "completed"]
+
         if name == "*":
-            # Return all artifacts that are ready (async) or completed (legacy)
+            # Return all ready artifacts
             if Artifact._meta.get_field('status'):
                 qs = Artifact.objects.filter(status__in=valid_statuses)
             else:
