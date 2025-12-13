@@ -283,7 +283,7 @@ class Artifact(models.Model):
         """API response format"""
         return {
             "name": self.name,
-            "id": str(self.id),
+            "id": self.id,
             "type": self.type
         }
 
