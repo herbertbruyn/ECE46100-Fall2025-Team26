@@ -7,8 +7,10 @@ Implements the spec's async flow:
 3. GET returns 404 until status=ready
 """
 import os
+import sys
 import logging
 import json
+import tempfile
 from typing import Dict, Tuple, Optional
 from django.db import transaction
 import boto3
@@ -349,11 +351,6 @@ class AsyncIngestService:
 
         Integrates with the existing metrics service in backend/src/Services
         """
-        import sys
-        import os
-        import tempfile
-        import json
-
         # Add src directory to path to import metrics service
         src_path = os.path.join(os.path.dirname(__file__), '../../../../src')
         if os.path.exists(src_path) and src_path not in sys.path:
@@ -447,49 +444,52 @@ class AsyncIngestService:
             # Create data object
             model_data = MinimalModelData(minimal_files, source_url, repo_id)
 
-            # Initialize metrics service
-            metric_service = ModelMetricService()
+            # Use the existing parallel metrics computation from src/main.py
+            from main import run_evaluations_parallel
 
-            # Compute ALL metrics IN PARALLEL (like src/main.py)
-            from concurrent.futures import ThreadPoolExecutor, as_completed
+            logger.info("Running metrics evaluation using src/main.py pipeline...")
+            evaluation_results = run_evaluations_parallel(model_data, max_workers=4)
+
+            # Convert from main.py format to our format
+            # main.py returns: {"Metric Name": (MetricResult, latency), ...}
+            # We need: {"metric_name": score_value, ...}
+            metric_name_map = {
+                "Performance Claims": "performance_claims",
+                "Bus Factor": "bus_factor",
+                "Size": "size_score",
+                "Ramp-Up Time": "ramp_up_time",
+                "Availability": "dataset_and_code_score",
+                "Code Quality": "code_quality",
+                "Dataset Quality": "dataset_quality",
+                "License": "license_score",
+                "Reproducibility": "reproducibility"
+            }
 
             metrics = {}
+            for display_name, (metric_result, _latency) in evaluation_results.items():
+                metric_key = metric_name_map.get(display_name, display_name.lower().replace(" ", "_"))
+                metrics[metric_key] = metric_result.value if hasattr(metric_result, 'value') else metric_result
 
-            # Define all evaluations
-            evaluations = [
-                ('performance_claims', lambda: metric_service.EvaluatePerformanceClaims(model_data)),
-                ('bus_factor', lambda: metric_service.EvaluateBusFactor(model_data)),
-                ('size_score', lambda: metric_service.EvaluateSize(model_data)),
-                ('dataset_and_code_score', lambda: metric_service.EvaluateDatasetAndCodeAvailabilityScore(model_data)),
-                ('code_quality', lambda: metric_service.EvaluateCodeQuality(model_data)),
-                ('dataset_quality', lambda: metric_service.EvaluateDatasetsQuality(model_data)),
-                ('ramp_up_time', lambda: metric_service.EvaluateRampUpTime(model_data)),
-                ('license_score', lambda: metric_service.EvaluateLicense(model_data)),
-                ('reproducibility', lambda: metric_service.EvaluateReproducibility(model_data)),
-                ('tree_score', lambda: self._compute_tree_score(artifact_id, minimal_files, repo_id)),
-                ('reviewedness', lambda: self._compute_reviewedness(minimal_files, repo_id, source_url)),
-            ]
+            # Add the 2 additional Django-specific metrics not in main.py pipeline
+            logger.info("Computing additional metrics (tree_score, reviewedness)...")
 
-            # Run metrics in parallel with 4 workers
-            logger.info("Computing metrics in parallel (max_workers=4)...")
-            with ThreadPoolExecutor(max_workers=4) as executor:
-                future_to_name = {executor.submit(eval_func): name for name, eval_func in evaluations}
+            # Tree score: parent model's net score
+            try:
+                metrics['tree_score'] = self._compute_tree_score(artifact_id, minimal_files, repo_id)
+                logger.info(f"Completed tree_score: {metrics['tree_score']}")
+            except Exception as e:
+                logger.warning(f"tree_score metric failed: {e}")
+                metrics['tree_score'] = 0.5
 
-                for future in as_completed(future_to_name):
-                    name = future_to_name[future]
-                    try:
-                        result = future.result()
-                        # Handle MetricResult objects
-                        if hasattr(result, 'value'):
-                            metrics[name] = result.value
-                        else:
-                            metrics[name] = result
-                        logger.info(f"Completed {name}: {metrics[name]}")
-                    except Exception as e:
-                        logger.warning(f"{name} metric failed: {e}")
-                        metrics[name] = 0.5
+            # Reviewedness: GitHub code review metrics
+            try:
+                metrics['reviewedness'] = self._compute_reviewedness(minimal_files, repo_id, source_url)
+                logger.info(f"Completed reviewedness: {metrics['reviewedness']}")
+            except Exception as e:
+                logger.warning(f"reviewedness metric failed: {e}")
+                metrics['reviewedness'] = 0.5
 
-            logger.info(f"Computed all metrics: {metrics}")
+            logger.info(f"All metrics computed: {metrics}")
             return metrics
 
         except ImportError as e:
