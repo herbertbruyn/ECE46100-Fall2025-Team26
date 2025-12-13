@@ -658,9 +658,19 @@ def artifact_license_check(request, id: str):
 
     try:
         # Get the model artifact
-        obj = Artifact.objects.get(pk=pk, type="model")
+        obj = Artifact.objects.get(pk=id, type="model")
+
+        # License check requires rating_scores, so artifact must be rated
+        # Return 404 if artifact is not available (same logic as GET endpoint)
+        if obj.status in ["disqualified", "failed", "rejected"]:
+            return Response({"detail": "Artifact not found"}, status=404)
+
     except Artifact.DoesNotExist:
         return Response({"detail": "Artifact not found"}, status=404)
+
+    # Validate request body exists
+    if not request.data:
+        return Response({"detail": "Request body is required"}, status=400)
 
     # Get GitHub URL from request body
     github_url = request.data.get("github_url")

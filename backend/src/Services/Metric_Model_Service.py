@@ -702,7 +702,14 @@ class ModelMetricService:
                         readme = fh.read()
                 except Exception:
                     readme = ""
-            text = (readme).strip()
+            
+            # IMPORTANT: Also include card content!
+            card = ""
+            card_obj = getattr(data, "card", None)
+            if card_obj is not None:
+                card = str(card_obj)
+            
+            text = (readme + "\n\n" + card).strip()
             if len(text) > 16000:
                 text = text[:16000] + "\n\n...[truncated]..."
             return text
@@ -710,21 +717,35 @@ class ModelMetricService:
         def prepare_llm_prompt(data: Model) -> str:
             assert isinstance(data, Model)
             text = _compose_source_text(data)
+            
+            if not text.strip():
+                # No documentation = return immediately with empty prompt
+                return ""
+            
             return (
+                "You are evaluating documentation quality for ramp-up time. "
+                "Be generous and recall-oriented.\n\n"
                 "OUTPUT FORMAT: JSON ONLY\n\n"
-                "Rate the README quality and return this JSON format:\n\n"
+                "Return this JSON format with scores from 0.0 to 1.0:\n\n"
                 "{\n"
-                '  "quality_of_example_code": (0.0 - 0.5),\n'
-                '  "readme_coverage": (0.0 - 0.5),\n'
-                '  "notes": "Good examples, clear docs"\n'
+                '  "quality_of_example_code": 0.75,\n'
+                '  "readme_coverage": 0.80,\n'
+                '  "notes": "Brief rationale (max 100 chars)"\n'
                 "}\n\n"
-                "Scoring (0.0 to 0.5):\n"
-                "- quality_of_example_code: Rate code examples and "
-                "usage instructions\n"
-                "- readme_coverage: Rate documentation completeness "
-                "and structure\n\n"
-                f"ANALYZE THIS README:\n{text[:6000]}\n\n"
-                "RESPOND WITH JSON ONLY:"
+                "SCORING GUIDELINES (be generous!):\n\n"
+                "quality_of_example_code (0.0 to 1.0):\n"
+                "- 0.0-0.2: No code examples\n"
+                "- 0.3-0.5: Minimal/incomplete examples\n"
+                "- 0.6-0.8: Good working examples with imports\n"
+                "- 0.9-1.0: Excellent, comprehensive, runnable examples\n\n"
+                "readme_coverage (0.0 to 1.0):\n"
+                "- 0.0-0.2: Minimal or no documentation\n"
+                "- 0.3-0.5: Basic description, minimal structure\n"
+                "- 0.6-0.8: Good coverage with installation, usage, examples\n"
+                "- 0.9-1.0: Comprehensive docs with API reference, tutorials\n\n"
+                "When uncertain, prefer higher scores. Good projects should score 0.7-0.9.\n\n"
+                f"ANALYZE THIS DOCUMENTATION:\n{text[:6000]}\n\n"
+                "RESPOND WITH JSON ONLY (no markdown, no commentary):"
             )
 
         def parse_llm_response(response: str) -> Dict[str, Any]:
@@ -734,14 +755,14 @@ class ModelMetricService:
             # Remove markdown code block markers if present
             response = response.strip()
             if response.startswith("```json"):
-                response = response[7:]  # Remove ```json
+                response = response[7:]
             if response.startswith("```"):
-                response = response[3:]   # Remove ```
+                response = response[3:]
             if response.endswith("```"):
-                response = response[:-3]  # Remove trailing ```
+                response = response[:-3]
             response = response.strip()
             
-            obj = json.loads(response)  # let it raise if bad JSON
+            obj = json.loads(response)
             
             # Handle array values - take the first value if it's an array
             quality_val = obj.get("quality_of_example_code", 0.0)
@@ -752,21 +773,38 @@ class ModelMetricService:
             if isinstance(readme_val, list) and readme_val:
                 readme_val = readme_val[0]
             
+            # Clamp values to [0.0, 1.0]
+            quality_val = max(0.0, min(1.0, float(quality_val)))
+            readme_val = max(0.0, min(1.0, float(readme_val)))
+            
             return {
-                "quality_of_example_code": float(quality_val),
-                "readme_coverage": float(readme_val),
+                "quality_of_example_code": quality_val,
+                "readme_coverage": readme_val,
                 "notes": str(obj.get("notes", ""))[:400],
             }
 
         try:
             prompt = prepare_llm_prompt(Data)
+            
+            # Handle case with no documentation
+            if not prompt:
+                return MetricResult(
+                    metric_type=MetricType.RAMP_UP_TIME,
+                    value=0.0,
+                    details={"mode": "no_docs", "reason": "No documentation found"},
+                    latency_ms=0,
+                )
+            
             response = self.llm_manager.call_genai_api(prompt)
             logging.info(f"LLM response content: {repr(response.content)}")
             parsed = parse_llm_response(response.content)
 
-            score = 0.0
-            score += parsed["quality_of_example_code"]
-            score += parsed["readme_coverage"]
+            # Calculate weighted average (50% each component)
+            score = (parsed["quality_of_example_code"] * 0.5 + 
+                    parsed["readme_coverage"] * 0.5)
+            
+            # Ensure final score is in [0.0, 1.0]
+            score = max(0.0, min(1.0, score))
 
             details = {"mode": "llm", **parsed}
 
@@ -778,6 +816,7 @@ class ModelMetricService:
             )
 
         except Exception as exc:
+            logging.error(f"Ramp-up time evaluation failed: {exc}")
             raise RuntimeError("LLM evaluation failed") from exc
 
     def EvaluateLicense(self, Data: Model) -> MetricResult:
