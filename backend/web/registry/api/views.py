@@ -375,10 +375,32 @@ def model_rate(request, id: int):
 
     # Check if we have rating_scores (new async format)
     if obj.rating_scores and obj.net_score is not None:
-        return Response({
+        # Convert to spec-compliant ModelRating format
+        rating_response = {
+            "name": obj.name,
+            "category": obj.type,  # Using artifact type as category
             "net_score": obj.net_score,
-            "scores": obj.rating_scores
-        }, status=200)
+            "net_score_latency": 0.0,  # Latency not tracked in async format
+        }
+
+        # Add all metrics with their latencies
+        for metric_name in ['ramp_up_time', 'bus_factor', 'performance_claims', 'license',
+                           'dataset_and_code_score', 'dataset_quality', 'code_quality',
+                           'reproducibility', 'reviewedness', 'tree_score']:
+            rating_response[metric_name] = obj.rating_scores.get(metric_name, 0.0)
+            rating_response[f"{metric_name}_latency"] = 0.0
+
+        # size_score must be an object per spec (lines 1191-1216)
+        size_score_value = obj.rating_scores.get('size_score', 0.0)
+        rating_response['size_score'] = {
+            "raspberry_pi": size_score_value,
+            "jetson_nano": size_score_value,
+            "desktop_pc": size_score_value,
+            "aws_server": size_score_value
+        }
+        rating_response['size_score_latency'] = 0.0
+
+        return Response(rating_response, status=200)
 
     # Fallback: check if rating exists (old format)
     if hasattr(obj, 'rating'):
