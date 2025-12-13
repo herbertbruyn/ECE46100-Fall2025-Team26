@@ -297,7 +297,7 @@ def artifact_details(request, artifact_type: str, id: int):
     
         # Validate metadata matches
         metadata = request.data.get("metadata", {})
-        if metadata.get("id") != id:
+        if str(metadata.get("id")) != str(id):
             return Response(
                 {"detail": "ID mismatch"},
                 status=400
