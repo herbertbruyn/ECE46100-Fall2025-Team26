@@ -208,10 +208,10 @@ class AsyncIngestService:
                 metrics = self._compute_metrics(minimal_files, source_url, repo_id, artifact_id)
                 net_score = self._calculate_net_score(metrics)
 
-                # STEP 2: Quality gate check - EACH metric must be >= 0.5
+                # STEP 2: Quality gate check - EACH metric must be > threshold
                 failed_metrics = []
                 for metric_name, metric_value in metrics.items():
-                    if metric_value <= SCORE_THRESHOLD:
+                    if metric_value < SCORE_THRESHOLD:
                         failed_metrics.append(f"{metric_name}={metric_value:.2f}")
 
                 if failed_metrics:
@@ -226,7 +226,7 @@ class AsyncIngestService:
                         artifact.save()
                     return  # Don't ingest, artifact stays hidden (404)
 
-                logger.info(f"PASSED QUALITY GATE: All metrics >= 0.5, net_score={net_score:.3f}")
+                logger.info(f"PASSED QUALITY GATE: All metrics >= {SCORE_THRESHOLD}, net_score={net_score:.3f}")
             else:
                 # For datasets/code, skip metrics evaluation entirely
                 logger.info(f"SKIP RATING: {artifact_type} artifacts don't require metrics evaluation")
