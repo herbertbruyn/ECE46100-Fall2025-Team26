@@ -93,7 +93,7 @@ class AsyncIngestService:
         # Create artifact with pending_rating status
         with transaction.atomic():
             artifact = Artifact.objects.create(
-                name=repo_id.split('/')[-1],
+                name=repo_id.split,
                 source_url=source_url,
                 type=artifact_type,
                 status="pending_rating",  # Waiting for background worker
@@ -339,7 +339,7 @@ class AsyncIngestService:
             parts = url.split('github.com/')[-1].split('/')
             # GitHub URLs are typically: github.com/owner/repo or github.com/owner/repo.git
             if len(parts) >= 2:
-                repo_name = parts[1].rstrip('.git')  # Remove .git suffix if present
+                repo_name = parts[1].removesuffix('.git')
                 return f"{parts[0]}/{repo_name}"
             return None
 
