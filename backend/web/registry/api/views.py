@@ -253,12 +253,25 @@ def artifact_create(request, artifact_type: str):
 
 @api_view(["GET", "PUT", "DELETE"])
 # @require_auth
-def artifact_details(request, artifact_type: str, id: int):
+def artifact_details(request, artifact_type: str, id: str):
     """GET, PUT, DELETE /artifacts/{artifact_type}/{id}"""
     import time
 
+    # Validate ID format (Spec: ^[a-zA-Z0-9\-]+$)
+    if not re.match(r"^[a-zA-Z0-9\-]+$", id):
+        return Response(
+            {"detail": "Artifact ID is malformed"},
+            status=400
+        )
+
+    # Since our DB uses integer IDs, any non-integer valid ID string is 404
+    if not id.isdigit():
+        return Response({"detail": "Artifact not found"}, status=404)
+    
+    pk = int(id)
+
     try:
-        obj = Artifact.objects.get(pk=id, type=artifact_type)
+        obj = Artifact.objects.get(pk=pk, type=artifact_type)
     except Artifact.DoesNotExist:
         return Response({"detail": "Artifact not found"}, status=404)
 
@@ -297,7 +310,7 @@ def artifact_details(request, artifact_type: str, id: int):
     
         # Validate metadata matches
         metadata = request.data.get("metadata", {})
-        if metadata.get("id") != id:
+        if str(metadata.get("id")) != id:
             return Response(
                 {"detail": "ID mismatch"},
                 status=400
@@ -343,7 +356,7 @@ def artifact_details(request, artifact_type: str, id: int):
 
 @api_view(["GET"])
 # @require_auth
-def model_rate(request, id: int):
+def model_rate(request, id: str):
     """
     GET /artifact/model/{id}/rate
 
@@ -352,8 +365,17 @@ def model_rate(request, id: int):
     """
     import time
 
+    # Validate ID format
+    if not re.match(r"^[a-zA-Z0-9\-]+$", id):
+        return Response({"detail": "Malformed ID"}, status=400)
+    
+    if not id.isdigit():
+        return Response({"detail": "Artifact not found"}, status=404)
+        
+    pk = int(id)
+
     try:
-        obj = Artifact.objects.get(pk=id, type="model")
+        obj = Artifact.objects.get(pk=pk, type="model")
     except Artifact.DoesNotExist:
         return Response({"detail": "Artifact not found"}, status=404)
 
@@ -487,9 +509,17 @@ def artifacts_list(request):
 
 @api_view(["GET"])
 # @require_auth
-def artifact_cost(request, artifact_type: str, id: int):
+def artifact_cost(request, artifact_type: str, id: str):
     """GET /artifact/{artifact_type}/{id}/cost"""
-    obj = get_object_or_404(Artifact, pk=id, type=artifact_type)
+    if not re.match(r"^[a-zA-Z0-9\-]+$", id):
+        return Response({"detail": "Malformed ID"}, status=400)
+    
+    if not id.isdigit():
+        return Response({"detail": "Artifact not found"}, status=404)
+        
+    pk = int(id)
+    
+    obj = get_object_or_404(Artifact, pk=pk, type=artifact_type)
     
     include_dependencies = request.query_params.get("dependency", "false").lower() == "true"
     
@@ -546,19 +576,21 @@ def tracks(request):
 
 @api_view(["GET"])
 #@require_auth
-def artifact_lineage(request, id: int):
+def artifact_lineage(request, id: str):
     """
     Get /artifact/model/{id}/lineage
     Return lineage graph for a model
-    Error Codes:
-    - 200: Success
-    - 400: Lineage graph cannot be computed because the artifact metadata is missing or malformed
-    - 403: Authentication failed due to invalid or missing Authentication Token
-    - 404: Artifact does not exist
     """
+    if not re.match(r"^[a-zA-Z0-9\-]+$", id):
+        return Response({"detail": "Malformed ID"}, status=400)
+    
+    if not id.isdigit():
+        return Response({"detail": "Artifact not found"}, status=404)
+        
+    pk = int(id)
 
     # 404
-    obj = get_object_or_404(Artifact, pk=id, type="model")
+    obj = get_object_or_404(Artifact, pk=pk, type="model")
 
 
     nodes = []
@@ -566,7 +598,7 @@ def artifact_lineage(request, id: int):
 
     # Add the model as the node
     nodes.append({
-        "artifact_id": obj.id,
+        "artifact_id": str(obj.id),
         "name": obj.name,
         "source": "config_json"
     })
@@ -593,13 +625,13 @@ def artifact_lineage(request, id: int):
 
         if parent_artifact:
             nodes.append({
-                "artifact_id": parent_artifact.id,
+                "artifact_id": str(parent_artifact.id),
                 "name": parent_artifact.name,
                 "source": "config_json"
             })
             edges.append({
-                "from_node_artifact_id": parent_artifact.id,
-                "to_node_artifact_id": obj.id,
+                "from_node_artifact_id": str(parent_artifact.id),
+                "to_node_artifact_id": str(obj.id),
                 "relationship": "base_model"
             })
 
@@ -611,10 +643,18 @@ def artifact_lineage(request, id: int):
 
 @api_view(["POST"])
 #@require_auth
-def artifact_license_check(request, id: int):
+def artifact_license_check(request, id: str):
     """POST /artifact/model/{id}/license-check - Check license compatibility"""
     import requests
     import re
+
+    if not re.match(r"^[a-zA-Z0-9\-]+$", id):
+        return Response({"detail": "Malformed ID"}, status=400)
+    
+    if not id.isdigit():
+        return Response({"detail": "Artifact not found"}, status=404)
+        
+    pk = int(id)
 
     try:
         # Get the model artifact
