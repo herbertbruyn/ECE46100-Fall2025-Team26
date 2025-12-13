@@ -416,9 +416,7 @@ def model_rate(request, id: int):
 @api_view(["POST"])
 # @require_auth
 def artifact_by_regex(request):
-    """POST /artifact/byRegEx - with blocking wait for artifacts to be ready"""
-    import time
-
+    """POST /artifact/byRegEx"""
     ser = ArtifactRegexSerializer(data=request.data)
     if not ser.is_valid():
         return Response({"detail": "invalid regex"}, status=400)
@@ -429,26 +427,11 @@ def artifact_by_regex(request):
     except re.error:
         return Response({"detail": "invalid regex"}, status=400)
 
-    # Get all artifacts that match the regex
-    matching_artifacts = [a for a in Artifact.objects.all() if rx.search(a.name)]
+    # Get only ready/completed artifacts that match the regex
+    valid_statuses = ["ready", "completed"]
+    matching_artifacts = [a for a in Artifact.objects.filter(status__in=valid_statuses) if rx.search(a.name)]
 
-    # Wait for each artifact to be ready before including it
-    results = []
-    max_wait = 170  # 170 seconds (safe margin under 3min autograder timeout)
-    start_time = time.time()
-
-    for artifact in matching_artifacts:
-        # Block until artifact is ready (for autograder consistency)
-        while artifact.status in ["pending_rating", "rating_in_progress", "ingesting", "pending", "downloading", "rating"]:
-            if time.time() - start_time > max_wait:
-                logging.warning(f"Timeout waiting for artifact {artifact.id} to be ready")
-                break  # Skip this artifact, move to next
-            time.sleep(0.5)  # Poll every 0.5 seconds
-            artifact.refresh_from_db()
-
-        # Only include ready artifacts (exclude disqualified, failed, rejected)
-        if artifact.status in ["ready", "completed"]:
-            results.append(artifact.metadata_view())
+    results = [a.metadata_view() for a in matching_artifacts]
 
     if not results:
         return Response({"detail": "No artifact found under this regex."}, status=404)
@@ -458,9 +441,7 @@ def artifact_by_regex(request):
 @api_view(["POST"])
 # @require_auth
 def artifacts_list(request):
-    """POST /artifacts - with blocking wait for artifacts to be ready"""
-    import time
-
+    """POST /artifacts"""
     queries = request.data
     if not isinstance(queries, list):
         return Response(
@@ -469,35 +450,23 @@ def artifacts_list(request):
         )
 
     results = []
-    max_wait = 170  # 170 seconds (safe margin under 3min autograder timeout)
-    start_time = time.time()
 
     for query in queries:
         name = query.get("name", "*")
         artifact_type = query.get("type")
 
-        # Get all matching artifacts (including in-progress ones)
+        # Get only ready/completed artifacts (don't wait for in-progress ones)
+        valid_statuses = ["ready", "completed"]
+
         if name == "*":
-            qs = Artifact.objects.all()
+            qs = Artifact.objects.filter(status__in=valid_statuses)
         else:
-            qs = Artifact.objects.filter(name__icontains=name)
+            qs = Artifact.objects.filter(name__icontains=name, status__in=valid_statuses)
 
         if artifact_type:
             qs = qs.filter(type=artifact_type)
 
-        # Wait for each artifact to be ready before including it
-        for artifact in qs:
-            # Block until artifact is ready (for autograder consistency)
-            while artifact.status in ["pending_rating", "rating_in_progress", "ingesting", "pending", "downloading", "rating"]:
-                if time.time() - start_time > max_wait:
-                    logging.warning(f"Timeout waiting for artifacts to be ready")
-                    break  # Skip this artifact, move to next
-                time.sleep(0.5)  # Poll every 0.5 seconds
-                artifact.refresh_from_db()
-
-            # Only include ready artifacts (exclude disqualified, failed, rejected)
-            if artifact.status in ["ready", "completed"]:
-                results.append(artifact.metadata_view())
+        results.extend([a.metadata_view() for a in qs])
     
     # Pagination
     offset = request.query_params.get("offset", 0)
@@ -597,7 +566,7 @@ def artifact_lineage(request, id: int):
 
     # Add the model as the node
     nodes.append({
-        "artifact_id": str(obj.id),
+        "artifact_id": obj.id,
         "name": obj.name,
         "source": "config_json"
     })
@@ -608,15 +577,9 @@ def artifact_lineage(request, id: int):
             {"detail": "The lineage graph cannot be computed because the artifact metadata is missing or malformed."},
             status=400
         )
+
     # Try to extract parent model
-    try:
-        parent_model_id = extract_parent_model(obj)
-    except Exception as e:
-        logging.error(f"Failed to extract parent model for artifact {id}: {e}")
-        return Response(
-            {"detail": f"The lineage graph cannot be computed because the artifact metadata is missing or malformed."},
-            status=400
-        )
+    parent_model_id = extract_parent_model(obj)
 
     if parent_model_id:
         parent_name = parent_model_id.split('/')[-1] if '/' in parent_model_id else parent_model_id
@@ -630,13 +593,13 @@ def artifact_lineage(request, id: int):
 
         if parent_artifact:
             nodes.append({
-                "artifact_id": str(parent_artifact.id),
+                "artifact_id": parent_artifact.id,
                 "name": parent_artifact.name,
                 "source": "config_json"
             })
             edges.append({
-                "from_node_artifact_id": str(parent_artifact.id),
-                "to_node_artifact_id": str(obj.id),
+                "from_node_artifact_id": parent_artifact.id,
+                "to_node_artifact_id": obj.id,
                 "relationship": "base_model"
             })
 
@@ -644,3 +607,78 @@ def artifact_lineage(request, id: int):
         "nodes": nodes,
         "edges": edges
     }, status=200)
+
+
+@api_view(["POST"])
+#@require_auth
+def artifact_license_check(request, id: int):
+    """POST /artifact/model/{id}/license-check - Check license compatibility"""
+    import requests
+    import re
+
+    try:
+        # Get the model artifact
+        obj = Artifact.objects.get(pk=id, type="model")
+    except Artifact.DoesNotExist:
+        return Response({"detail": "Artifact not found"}, status=404)
+
+    # Get GitHub URL from request body
+    github_url = request.data.get("github_url")
+    if not github_url:
+        return Response({"detail": "github_url is required"}, status=400)
+
+    # Extract owner/repo from GitHub URL
+    match = re.search(r'github\.com/([^/]+)/([^/]+)', github_url)
+    if not match:
+        return Response({"detail": "Invalid GitHub URL"}, status=400)
+
+    owner, repo = match.groups()
+    repo = repo.rstrip('.git')  # Remove .git suffix if present
+
+    # Get GitHub repo license via API
+    try:
+        github_api_url = f"https://api.github.com/repos/{owner}/{repo}"
+        headers = {'Accept': 'application/vnd.github.v3+json'}
+
+        github_token = os.getenv('GITHUB_TOKEN')
+        if github_token:
+            headers['Authorization'] = f'token {github_token}'
+
+        response = requests.get(github_api_url, headers=headers, timeout=10)
+
+        if response.status_code == 404:
+            return Response({"detail": "GitHub repository not found"}, status=404)
+        elif response.status_code != 200:
+            return Response({"detail": "Failed to retrieve GitHub license information"}, status=502)
+
+        repo_data = response.json()
+        github_license = repo_data.get('license', {})
+        github_license_key = github_license.get('key', '') if github_license else ''
+
+    except requests.RequestException as e:
+        logging.error(f"Failed to fetch GitHub license: {e}")
+        return Response({"detail": "External license information could not be retrieved"}, status=502)
+
+    # Get model license from rating_scores
+    model_license_score = 0.0
+    if obj.rating_scores and 'license_score' in obj.rating_scores:
+        model_license_score = obj.rating_scores['license_score']
+
+    # Simple compatibility logic based on ModelGo paper principles:
+    # Permissive licenses (MIT, Apache, BSD) are generally compatible for fine-tune + inference
+    # Copyleft licenses (GPL) may have restrictions
+    # If model has high license score (>0.5), it's likely permissive and compatible
+
+    permissive_licenses = ['mit', 'apache-2.0', 'bsd-2-clause', 'bsd-3-clause', 'isc', 'cc0-1.0']
+
+    # Compatible if:
+    # 1. GitHub project uses permissive license, OR
+    # 2. Model has good license score (>0.5) indicating permissive license, OR
+    # 3. Both have permissive licenses
+
+    is_compatible = (
+        github_license_key in permissive_licenses or
+        model_license_score > 0.5
+    )
+
+    return Response(is_compatible, status=200)
