@@ -426,16 +426,27 @@ def artifacts_list(request):
     for query in queries:
         name = query.get("name", "*")
         artifact_type = query.get("type")
+
+        valid_statuses = [
+            "pending_rating",      
+            "rating_in_progress",
+            "ingesting",         
+            "ready",               
+            "pending",             
+            "downloading",         
+            "rating",              
+            "completed"            
+        ]
         
         if name == "*":
             # Return all artifacts that are ready (async) or completed (legacy)
             if Artifact._meta.get_field('status'):
-                qs = Artifact.objects.filter(status__in=["ready", "completed"])
+                qs = Artifact.objects.filter(status__in=valid_statuses)
             else:
                 qs = Artifact.objects.all()
         else:
             if Artifact._meta.get_field('status'):
-                qs = Artifact.objects.filter(name__icontains=name, status__in=["ready", "completed"])
+                qs = Artifact.objects.filter(name__icontains=name, status__in=valid_statuses)
             else:
                 qs = Artifact.objects.filter(name__icontains=name)
         
