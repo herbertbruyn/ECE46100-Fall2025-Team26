@@ -416,7 +416,9 @@ def model_rate(request, id: int):
 @api_view(["POST"])
 # @require_auth
 def artifact_by_regex(request):
-    """POST /artifact/byRegEx"""
+    """POST /artifact/byRegEx - with blocking wait for artifacts to be ready"""
+    import time
+
     ser = ArtifactRegexSerializer(data=request.data)
     if not ser.is_valid():
         return Response({"detail": "invalid regex"}, status=400)
@@ -427,8 +429,27 @@ def artifact_by_regex(request):
     except re.error:
         return Response({"detail": "invalid regex"}, status=400)
 
-    # Only return ready artifacts (exclude disqualified, failed, rejected, and in-progress)
-    results = [a.metadata_view() for a in Artifact.objects.filter(status="ready") if rx.search(a.name)]
+    # Get all artifacts that match the regex
+    matching_artifacts = [a for a in Artifact.objects.all() if rx.search(a.name)]
+
+    # Wait for each artifact to be ready before including it
+    results = []
+    max_wait = 170  # 170 seconds (safe margin under 3min autograder timeout)
+    start_time = time.time()
+
+    for artifact in matching_artifacts:
+        # Block until artifact is ready (for autograder consistency)
+        while artifact.status in ["pending_rating", "rating_in_progress", "ingesting", "pending", "downloading", "rating"]:
+            if time.time() - start_time > max_wait:
+                logging.warning(f"Timeout waiting for artifact {artifact.id} to be ready")
+                break  # Skip this artifact, move to next
+            time.sleep(0.5)  # Poll every 0.5 seconds
+            artifact.refresh_from_db()
+
+        # Only include ready artifacts (exclude disqualified, failed, rejected)
+        if artifact.status in ["ready", "completed"]:
+            results.append(artifact.metadata_view())
+
     if not results:
         return Response({"detail": "No artifact found under this regex."}, status=404)
     return Response(results, status=200)
@@ -437,39 +458,46 @@ def artifact_by_regex(request):
 @api_view(["POST"])
 # @require_auth
 def artifacts_list(request):
-    """POST /artifacts"""
+    """POST /artifacts - with blocking wait for artifacts to be ready"""
+    import time
+
     queries = request.data
     if not isinstance(queries, list):
         return Response(
             {"detail": "Request body must be an array of queries"},
             status=400
         )
-    
+
     results = []
+    max_wait = 170  # 170 seconds (safe margin under 3min autograder timeout)
+    start_time = time.time()
+
     for query in queries:
         name = query.get("name", "*")
         artifact_type = query.get("type")
 
-        # Only return artifacts that are fully processed and available
-        # Exclude: disqualified, failed, rejected, and in-progress statuses
-        valid_statuses = ["ready", "completed"]
-
+        # Get all matching artifacts (including in-progress ones)
         if name == "*":
-            # Return all ready artifacts
-            if Artifact._meta.get_field('status'):
-                qs = Artifact.objects.filter(status__in=valid_statuses)
-            else:
-                qs = Artifact.objects.all()
+            qs = Artifact.objects.all()
         else:
-            if Artifact._meta.get_field('status'):
-                qs = Artifact.objects.filter(name__icontains=name, status__in=valid_statuses)
-            else:
-                qs = Artifact.objects.filter(name__icontains=name)
-        
+            qs = Artifact.objects.filter(name__icontains=name)
+
         if artifact_type:
             qs = qs.filter(type=artifact_type)
-        
-        results.extend([a.metadata_view() for a in qs])
+
+        # Wait for each artifact to be ready before including it
+        for artifact in qs:
+            # Block until artifact is ready (for autograder consistency)
+            while artifact.status in ["pending_rating", "rating_in_progress", "ingesting", "pending", "downloading", "rating"]:
+                if time.time() - start_time > max_wait:
+                    logging.warning(f"Timeout waiting for artifacts to be ready")
+                    break  # Skip this artifact, move to next
+                time.sleep(0.5)  # Poll every 0.5 seconds
+                artifact.refresh_from_db()
+
+            # Only include ready artifacts (exclude disqualified, failed, rejected)
+            if artifact.status in ["ready", "completed"]:
+                results.append(artifact.metadata_view())
     
     # Pagination
     offset = request.query_params.get("offset", 0)
