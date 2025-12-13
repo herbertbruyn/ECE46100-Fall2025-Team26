@@ -326,23 +326,41 @@ class AsyncIngestService:
     def _parse_repo_id(self, source_url: str) -> Optional[str]:
         """Extract repo_id from HuggingFace or GitHub URL"""
         url = source_url.rstrip('/')
-
+        
         # Handle HuggingFace URLs
         if 'huggingface.co/' in url:
             parts = url.split('huggingface.co/')[-1].split('/')
+            
+            # Remove path components like /tree/main, /blob/, /resolve/, etc.
+            # Keep only the meaningful parts
             if parts[0] in ['datasets', 'spaces']:
-                return '/'.join(parts[1:])
-            return '/'.join(parts)
-
+                # Format: huggingface.co/datasets/owner/name or huggingface.co/spaces/owner/name
+                if len(parts) >= 3:
+                    return f"{parts[1]}/{parts[2]}"
+                elif len(parts) == 2 and parts[1]:
+                    return parts[1]  # Single-level dataset/space name
+                return None
+            else:
+                # Format: huggingface.co/owner/model
+                if len(parts) >= 2 and parts[0] and parts[1]:
+                    return f"{parts[0]}/{parts[1]}"
+                elif len(parts) == 1 and parts[0]:
+                    return parts[0]  # Single-level model name
+                return None
+        
         # Handle GitHub URLs for code artifacts
         if 'github.com/' in url:
             parts = url.split('github.com/')[-1].split('/')
-            # GitHub URLs are typically: github.com/owner/repo or github.com/owner/repo.git
-            if len(parts) >= 2:
-                repo_name = parts[1].rstrip('.git')  # Remove .git suffix if present
-                return f"{parts[0]}/{repo_name}"
+            
+            # Remove .git suffix and any subdirectories like /tree/, /blob/
+            # Keep only owner/repo
+            if len(parts) >= 2 and parts[0] and parts[1]:
+                repo_name = parts[1].rstrip('.git')
+                if repo_name:  # Make sure repo_name isn't empty after stripping
+                    return f"{parts[0]}/{repo_name}"
+            
             return None
-
+        
         return None
 
     def _compute_metrics(self, minimal_files: Dict[str, bytes], source_url: str, repo_id: str, artifact_id: int) -> Dict:
