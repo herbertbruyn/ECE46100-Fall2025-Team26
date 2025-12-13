@@ -93,7 +93,7 @@ class AsyncIngestService:
         # Create artifact with pending_rating status
         with transaction.atomic():
             artifact = Artifact.objects.create(
-                name=repo_id.split('/')[-1],
+                name=repo_id,
                 source_url=source_url,
                 type=artifact_type,
                 status="pending_rating",  # Waiting for background worker
