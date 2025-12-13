@@ -285,7 +285,8 @@ def artifact_details(request, artifact_type: str, id: int):
         response_data = {
             "metadata": obj.metadata_view(),
             "data": {
-                "url": obj.source_url
+                "url": obj.source_url,
+                "download_url": obj.download_url or (obj.blob.url if obj.blob else None)
             }
         }
 
