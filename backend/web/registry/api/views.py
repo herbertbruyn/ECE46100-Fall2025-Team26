@@ -669,15 +669,36 @@ def artifact_license_check(request, id: int):
     # Copyleft licenses (GPL) may have restrictions
     # If model has high license score (>0.5), it's likely permissive and compatible
 
-    permissive_licenses = ['mit', 'apache-2.0', 'bsd-2-clause', 'bsd-3-clause', 'isc', 'cc0-1.0']
+    # License classification map (from EvaluateLicense in Metric_Model_Service.py)
+    permissive_licenses = {
+        'mit', 'bsd', 'bsd-2-clause', 'bsd-3-clause',
+        'apache', 'apache-2.0', 'isc', 'unlicense', 'cc0-1.0',
+        'lgpl-2.1', 'lgpl-3.0'
+    }
 
-    # Compatible if:
-    # 1. GitHub project uses permissive license, OR
-    # 2. Model has good license score (>0.5) indicating permissive license, OR
-    # 3. Both have permissive licenses
+    restrictive_licenses = {
+        'gpl-2.0', 'gpl-3.0', 'agpl', 'agpl-3.0',
+        'cc-by-nc', 'non-commercial', 'proprietary'
+    }
 
+    # Classify GitHub license
+    github_license_name = (github_license.get('name', '') if github_license else '').lower()
+    github_license_lower = github_license_key.lower()
+
+    # Check if GitHub license is restrictive (score = 0.0)
+    github_is_restrictive = any(lic in github_license_lower or lic in github_license_name
+                                for lic in restrictive_licenses)
+
+    # Check if GitHub license is permissive (score = 1.0)
+    github_is_permissive = any(lic in github_license_lower or lic in github_license_name
+                               for lic in permissive_licenses)
+
+    # For compatibility with fine-tune + inference:
+    # BOTH GitHub repo AND model must have permissive licenses
+    # If either is restrictive or unknown, they're incompatible
     is_compatible = (
-        github_license_key in permissive_licenses or
+        github_is_permissive and
+        not github_is_restrictive and
         model_license_score > 0.5
     )
 
