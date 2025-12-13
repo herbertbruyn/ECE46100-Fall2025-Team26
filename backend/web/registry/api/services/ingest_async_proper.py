@@ -339,7 +339,10 @@ class AsyncIngestService:
             parts = url.split('github.com/')[-1].split('/')
             # GitHub URLs are typically: github.com/owner/repo or github.com/owner/repo.git
             if len(parts) >= 2:
-                repo_name = parts[1].rstrip('.git')  # Remove .git suffix if present
+                repo_name = parts[1]
+                # Remove .git suffix if present (use removesuffix for exact match)
+                if repo_name.endswith('.git'):
+                    repo_name = repo_name[:-4]
                 return f"{parts[0]}/{repo_name}"
             return None
 
