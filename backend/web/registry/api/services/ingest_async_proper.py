@@ -334,9 +334,10 @@ class AsyncIngestService:
         # Handle GitHub URLs for code artifacts
         if 'github.com/' in url:
             parts = url.split('github.com/')[-1].split('/')
-            # GitHub URLs are typically: github.com/owner/repo
+            # GitHub URLs are typically: github.com/owner/repo or github.com/owner/repo.git
             if len(parts) >= 2:
-                return f"{parts[0]}/{parts[1]}"
+                repo_name = parts[1].rstrip('.git')  # Remove .git suffix if present
+                return f"{parts[0]}/{repo_name}"
             return None
 
         return None
