@@ -700,14 +700,28 @@ class ModelMetricService:
                 try:
                     with open(path, "r", encoding="utf-8") as fh:
                         readme = fh.read()
-                except Exception:
+                except Exception as e:
+                    logging.debug(f"Could not read README from {path}: {e}")
                     readme = ""
             
             # IMPORTANT: Also include card content!
             card = ""
             card_obj = getattr(data, "card", None)
             if card_obj is not None:
-                card = str(card_obj)
+                try:
+                    # ModelCardData might have text or be a dict-like object
+                    if hasattr(card_obj, 'text'):
+                        card = str(card_obj.text)
+                    elif hasattr(card_obj, 'to_dict'):
+                        card_dict = card_obj.to_dict()
+                        # Extract relevant text fields
+                        if isinstance(card_dict, dict):
+                            card = str(card_dict)
+                    else:
+                        card = str(card_obj)
+                except Exception as e:
+                    logging.debug(f"Could not extract card content: {e}")
+                    card = ""
             
             text = (readme + "\n\n" + card).strip()
             if len(text) > 16000:
@@ -749,39 +763,60 @@ class ModelMetricService:
             )
 
         def parse_llm_response(response: str) -> Dict[str, Any]:
-            if not response or not response.strip():
-                raise ValueError("Empty response from LLM")
-            
-            # Remove markdown code block markers if present
-            response = response.strip()
-            if response.startswith("```json"):
-                response = response[7:]
-            if response.startswith("```"):
-                response = response[3:]
-            if response.endswith("```"):
-                response = response[:-3]
-            response = response.strip()
-            
-            obj = json.loads(response)
-            
-            # Handle array values - take the first value if it's an array
-            quality_val = obj.get("quality_of_example_code", 0.0)
-            if isinstance(quality_val, list) and quality_val:
-                quality_val = quality_val[0]
-            
-            readme_val = obj.get("readme_coverage", 0.0)
-            if isinstance(readme_val, list) and readme_val:
-                readme_val = readme_val[0]
-            
-            # Clamp values to [0.0, 1.0]
-            quality_val = max(0.0, min(1.0, float(quality_val)))
-            readme_val = max(0.0, min(1.0, float(readme_val)))
-            
-            return {
-                "quality_of_example_code": quality_val,
-                "readme_coverage": readme_val,
-                "notes": str(obj.get("notes", ""))[:400],
-            }
+            try:
+                if not response or not response.strip():
+                    logging.warning("Empty LLM response, using fallback scores")
+                    return {
+                        "quality_of_example_code": 0.5,
+                        "readme_coverage": 0.5,
+                        "notes": "Fallback: Empty LLM response"
+                    }
+                
+                # Remove markdown code block markers if present
+                response = response.strip()
+                if response.startswith("```json"):
+                    response = response[7:]
+                if response.startswith("```"):
+                    response = response[3:]
+                if response.endswith("```"):
+                    response = response[:-3]
+                response = response.strip()
+                
+                obj = json.loads(response)
+                
+                # Handle array values - take the first value if it's an array
+                quality_val = obj.get("quality_of_example_code", 0.5)
+                if isinstance(quality_val, list) and quality_val:
+                    quality_val = quality_val[0]
+                
+                readme_val = obj.get("readme_coverage", 0.5)
+                if isinstance(readme_val, list) and readme_val:
+                    readme_val = readme_val[0]
+                
+                # Clamp values to [0.0, 1.0]
+                quality_val = max(0.0, min(1.0, float(quality_val)))
+                readme_val = max(0.0, min(1.0, float(readme_val)))
+                
+                return {
+                    "quality_of_example_code": quality_val,
+                    "readme_coverage": readme_val,
+                    "notes": str(obj.get("notes", ""))[:400],
+                }
+            except json.JSONDecodeError as e:
+                logging.warning(f"Failed to parse LLM JSON response: {e}. "
+                               f"Response: {response[:200]}")
+                return {
+                    "quality_of_example_code": 0.5,
+                    "readme_coverage": 0.5,
+                    "notes": f"Fallback: JSON parse error - {str(e)[:100]}"
+                }
+            except Exception as e:
+                logging.warning(f"Error parsing LLM response: {e}")
+                return {
+                    "quality_of_example_code": 0.5,
+                    "readme_coverage": 0.5,
+                    "notes": f"Fallback: Parse error - {str(e)[:100]}"
+                }
 
         try:
             prompt = prepare_llm_prompt(Data)
@@ -816,8 +851,19 @@ class ModelMetricService:
             )
 
         except Exception as exc:
-            logging.error(f"Ramp-up time evaluation failed: {exc}")
-            raise RuntimeError("LLM evaluation failed") from exc
+            logging.error(f"Ramp-up time evaluation failed: {exc}", exc_info=True)
+            # Return fallback score instead of raising
+            return MetricResult(
+                metric_type=MetricType.RAMP_UP_TIME,
+                value=0.5,  # Neutral fallback score
+                details={
+                    "mode": "fallback",
+                    "reason": "LLM evaluation failed",
+                    "error": str(exc)[:200]
+                },
+                latency_ms=0,
+                error=str(exc)
+            )
 
     def EvaluateLicense(self, Data: Model) -> MetricResult:
         def _get_license_info(data: Model) -> str:
