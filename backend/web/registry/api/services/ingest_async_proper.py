@@ -361,11 +361,13 @@ class AsyncIngestService:
 
         try:
             from Services.Metric_Model_Service import ModelMetricService
+            from Models.Model import Model
 
             # Create model data object from minimal_files
-            class MinimalModelData:
+            class MinimalModelData(Model):
                 """Adapter to convert minimal_files data into Model interface for metrics"""
                 def __init__(self, minimal_files: Dict[str, bytes], source_url: str, repo_id: str):
+                    super().__init__()  # Initialize parent Model class
                     # README (write to temp file - metrics service expects path)
                     self.readme_path = None
                     for filename in ['README.md', 'README.txt', 'README']:
