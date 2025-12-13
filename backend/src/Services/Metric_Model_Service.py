@@ -728,8 +728,7 @@ class ModelMetricService:
                 text = text[:16000] + "\n\n...[truncated]..."
             return text
 
-        def prepare_llm_prompt(data: Model) -> str:
-            assert isinstance(data, Model)
+        def prepare_llm_prompt(data) -> str:
             text = _compose_source_text(data)
             
             if not text.strip():
