@@ -282,19 +282,13 @@ class AsyncIngestService:
                     from api.models import find_or_create_dataset
                     dataset_obj = find_or_create_dataset(artifact.name)
 
-                    # Models might have dataset_name with slashes (from README extraction)
-                    # Need to check both formats: "rajpurkar/squad" and "rajpurkar-squad"
-                    # artifact.name is already in hyphen format, so convert to slash format too
-                    dataset_name_with_slash = artifact.name.replace('-', '/', 1) if '-' in artifact.name else artifact.name
-
-                    # Update all models that reference this dataset by name (check both formats)
-                    from django.db.models import Q
+                    # Update all models that reference this dataset by name
+                    # Use __icontains to match dataset name regardless of format
+                    # (handles both "rajpurkar/squad" and "rajpurkar-squad" variations)
                     models_to_link = Artifact.objects.filter(
                         type="model",
+                        dataset_name__icontains=artifact.name,
                         dataset__isnull=True  # Only link models that don't already have a dataset linked
-                    ).filter(
-                        Q(dataset_name__icontains=artifact.name) |  # Match hyphen format
-                        Q(dataset_name__icontains=dataset_name_with_slash)  # Match slash format
                     )
                     for model_artifact in models_to_link:
                         model_artifact.dataset = dataset_obj
@@ -306,18 +300,12 @@ class AsyncIngestService:
                     from api.models import find_or_create_code
                     code_obj = find_or_create_code(artifact.name)
 
-                    # Models might have code_name with slashes (from README extraction)
-                    # Need to check both formats
-                    code_name_with_slash = artifact.name.replace('-', '/', 1) if '-' in artifact.name else artifact.name
-
-                    # Update all models that reference this code by name (check both formats)
-                    from django.db.models import Q
+                    # Update all models that reference this code by name
+                    # Use __icontains to match code name regardless of format
                     models_to_link = Artifact.objects.filter(
                         type="model",
+                        code_name__icontains=artifact.name,
                         code__isnull=True  # Only link models that don't already have a code linked
-                    ).filter(
-                        Q(code_name__icontains=artifact.name) |  # Match hyphen format
-                        Q(code_name__icontains=code_name_with_slash)  # Match slash format
                     )
                     for model_artifact in models_to_link:
                         model_artifact.code = code_obj
