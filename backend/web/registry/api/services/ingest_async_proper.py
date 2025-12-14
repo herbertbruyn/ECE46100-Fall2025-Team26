@@ -92,8 +92,12 @@ class AsyncIngestService:
 
         # Create artifact with pending_rating status
         with transaction.atomic():
+            # Convert repo_id to name format expected by autograder
+            # Replace forward slashes with hyphens: "google-research/bert" -> "google-research-bert"
+            artifact_name = repo_id.replace('/', '-')
+
             artifact = Artifact.objects.create(
-                name=repo_id.split('/')[-1],
+                name=artifact_name,
                 source_url=source_url,
                 type=artifact_type,
                 status="pending_rating",  # Waiting for background worker
@@ -278,11 +282,19 @@ class AsyncIngestService:
                     from api.models import find_or_create_dataset
                     dataset_obj = find_or_create_dataset(artifact.name)
 
-                    # Update all models that reference this dataset by name
+                    # Models might have dataset_name with slashes (from README extraction)
+                    # Need to check both formats: "rajpurkar/squad" and "rajpurkar-squad"
+                    # artifact.name is already in hyphen format, so convert to slash format too
+                    dataset_name_with_slash = artifact.name.replace('-', '/', 1) if '-' in artifact.name else artifact.name
+
+                    # Update all models that reference this dataset by name (check both formats)
+                    from django.db.models import Q
                     models_to_link = Artifact.objects.filter(
                         type="model",
-                        dataset_name__icontains=artifact.name,
                         dataset__isnull=True  # Only link models that don't already have a dataset linked
+                    ).filter(
+                        Q(dataset_name__icontains=artifact.name) |  # Match hyphen format
+                        Q(dataset_name__icontains=dataset_name_with_slash)  # Match slash format
                     )
                     for model_artifact in models_to_link:
                         model_artifact.dataset = dataset_obj
@@ -294,11 +306,18 @@ class AsyncIngestService:
                     from api.models import find_or_create_code
                     code_obj = find_or_create_code(artifact.name)
 
-                    # Update all models that reference this code by name
+                    # Models might have code_name with slashes (from README extraction)
+                    # Need to check both formats
+                    code_name_with_slash = artifact.name.replace('-', '/', 1) if '-' in artifact.name else artifact.name
+
+                    # Update all models that reference this code by name (check both formats)
+                    from django.db.models import Q
                     models_to_link = Artifact.objects.filter(
                         type="model",
-                        code_name__icontains=artifact.name,
                         code__isnull=True  # Only link models that don't already have a code linked
+                    ).filter(
+                        Q(code_name__icontains=artifact.name) |  # Match hyphen format
+                        Q(code_name__icontains=code_name_with_slash)  # Match slash format
                     )
                     for model_artifact in models_to_link:
                         model_artifact.code = code_obj
@@ -612,20 +631,26 @@ class AsyncIngestService:
             
             if not parent_model_id:
                 return 0.5
-            
+
             from api.models import Artifact
-            parent_name = parent_model_id.split('/')[-1] if '/' in parent_model_id else parent_model_id
-            
+
+            # Convert parent_model_id to the same format we use for artifact names
+            # If it has a slash, convert to hyphen format: "microsoft/resnet-50" -> "microsoft-resnet-50"
+            # This ensures exact matching with our stored artifact names
+            parent_name = parent_model_id.replace('/', '-')
+
+            # Use exact match to avoid confusion between models with similar names
+            # e.g., "resnet-50" vs "microsoft-resnet-50" vs "google-resnet-50"
             parent_artifact = Artifact.objects.filter(
                 type="model",
-                name__icontains=parent_name,
+                name=parent_name,  # Exact match
                 status="ready"
             ).exclude(id=artifact_id).first()
-            
+
             if parent_artifact and parent_artifact.net_score is not None:
                 logger.info(f"Found parent {parent_artifact.name} with net_score {parent_artifact.net_score}")
                 return parent_artifact.net_score
-            
+
             return 0.5
         except Exception as e:
             logger.error(f"Tree score failed: {e}")
