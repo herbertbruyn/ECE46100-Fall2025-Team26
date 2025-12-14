@@ -66,7 +66,8 @@ def run_evaluations_sequential(model_data) -> \
         ("Availability", service.EvaluateDatasetAndCodeAvailabilityScore),
         ("Code Quality", service.EvaluateCodeQuality),
         ("Dataset Quality", service.EvaluateDatasetsQuality),
-        ("License", service.EvaluateLicense)
+        ("License", service.EvaluateLicense),
+        ("Reproducibility", service.EvaluateReproducibility)
     ]
     
     logging.info("Running evaluations sequentially...")
@@ -82,14 +83,14 @@ def run_evaluations_sequential(model_data) -> \
     return results
 
 
-def run_evaluations_parallel(model_data, max_workers: int = 4) -> \
+def run_evaluations_parallel(model_data, max_workers: int = 2) -> \
         Dict[str, Tuple[MetricResult, float]]:
     """
     Run all evaluations in parallel using ThreadPoolExecutor and time each one.
 
     Args:
         model_data: The model data to evaluate
-        max_workers: Maximum number of worker threads (default: 4)
+        max_workers: Maximum number of worker threads (default: 2)
 
     Returns:
         Dictionary mapping evaluation names to (result, time) tuples
@@ -362,7 +363,8 @@ def run_batch_evaluation(input_file):
         )
         
         start_time = time.perf_counter()
-        results = run_evaluations_parallel(model_data, max_workers=4)
+        # Use max_workers=2 for free-tier EC2 to balance speed and stability
+        results = run_evaluations_parallel(model_data, max_workers=2)
         end_time = time.perf_counter()
         total_time = end_time - start_time
         

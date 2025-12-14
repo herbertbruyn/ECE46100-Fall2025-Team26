@@ -453,7 +453,8 @@ class AsyncIngestService:
             from main import run_evaluations_parallel
 
             logger.info("Running metrics evaluation using src/main.py pipeline...")
-            evaluation_results = run_evaluations_parallel(model_data, max_workers=4)
+            # Use parallel with max_workers=2 for free-tier EC2 (1GB RAM)
+            evaluation_results = run_evaluations_parallel(model_data, max_workers=2)
 
             # Convert from main.py format to our format
             # main.py returns: {"Metric Name": (MetricResult, latency), ...}

@@ -11,10 +11,10 @@ from Helpers import _parse_iso8601, _months_between
 
 class ModelMetricService:
     def __init__(self) -> None:
-        logging.info("[Metric Service] Initializing ModelMetricService...")
+        # logging.info("[Metric Service] Initializing ModelMetricService...")
         try:
             self.llm_manager = LLMManager()
-            logging.info("[Metric Service] LLM Manager initialized successfully")
+            # logging.info("[Metric Service] LLM Manager initialized successfully")
         except Exception as e:
             logging.error(f"[Metric Service] Failed to initialize LLM Manager: {e}")
             raise
@@ -47,8 +47,12 @@ class ModelMetricService:
             if card_obj is not None:
                 card = str(card_obj)
             text = (readme + "\n\n" + card).strip()
-            if len(text) > 16000:
-                text = text[:16000] + "\n\n...[truncated]..."
+            
+            # Smart truncation: Keep the beginning (most important) and some from middle
+            # Most READMEs put critical info (benchmarks, quick-start) at the top
+            if len(text) > 8000:
+                # Take first 7000 chars + last 1000 (might have benchmarks/citations)
+                text = text[:7000] + "\n\n...[truncated]...\n\n" + text[-1000:]
             return text
 
         def prepare_llm_prompt(data: Model) -> str:
@@ -73,7 +77,8 @@ class ModelMetricService:
                 "When uncertain, prefer a higher score (recall > precision).\n\n"
                 "Answer with JSON only. No prose.\n"
                 "=== BEGIN TEXT ===\n"
-                f"{text[:8000]}\n"
+                # Use full available text (already truncated smartly in _compose_source_text)
+                f"{text}\n"
                 "=== END TEXT ===\n"
             )
 
@@ -118,35 +123,35 @@ class ModelMetricService:
         }
 
         try:
-            logging.info("[Performance Claims] Starting evaluation...")
-            logging.debug(f"[Performance Claims] Model data attributes: {dir(Data)}")
+            # logging.info("[Performance Claims] Starting evaluation...")
+            # logging.debug(f"[Performance Claims] Model data attributes: {dir(Data)}")
             
             prompt = prepare_llm_prompt(Data)
-            logging.info(f"[Performance Claims] Prepared prompt (length: {len(prompt)})")
+            # logging.info(f"[Performance Claims] Prepared prompt (length: {len(prompt)})")
             
-            logging.info("[Performance Claims] Calling LLM API...")
+            # logging.info("[Performance Claims] Calling LLM API...")
             response = self.llm_manager.call_genai_api(prompt)
-            logging.info(f"[Performance Claims] LLM response received")
-            logging.info(f"[Performance Claims] Response content: {repr(response.content[:500])}")
+            # logging.info(f"[Performance Claims] LLM response received")
+            # logging.info(f"[Performance Claims] Response content: {repr(response.content[:500])}")
             
             response_text = ""
             if hasattr(response, 'content'):
                 response_text = response.content
-                logging.debug("[Performance Claims] Extracted content from response.content")
+                # logging.debug("[Performance Claims] Extracted content from response.content")
             elif isinstance(response, str):
                 response_text = response
-                logging.debug("[Performance Claims] Response is a string")
+                # logging.debug("[Performance Claims] Response is a string")
             else:
                 response_text = str(response)
-                logging.warning("[Performance Claims] Converted response to string")
+                # logging.warning("[Performance Claims] Converted response to string")
             
-            logging.info("[Performance Claims] Parsing LLM response...")
+            # logging.info("[Performance Claims] Parsing LLM response...")
             parsed = parse_llm_response(response_text)
-            logging.info(f"[Performance Claims] Parsed result: {parsed}")
+            # logging.info(f"[Performance Claims] Parsed result: {parsed}")
 
             # Use the score directly from the LLM response
             score = parsed.get("score", 0.0)
-            logging.info(f"[Performance Claims] Final score: {score}")
+            # logging.info(f"[Performance Claims] Final score: {score}")
 
             details = {"mode": "llm", **parsed}
 
@@ -523,7 +528,7 @@ class ModelMetricService:
 
         def _analyze_code_with_llm(repo_contents: list) -> Dict[str, Any]:
             """Analyze code structure - fallback to heuristics if LLM fails"""
-            logging.info("[Code Quality] Starting code structure analysis...")
+            # logging.info("[Code Quality] Starting code structure analysis...")
 
             # Try LLM first, but use heuristics as fallback
             try:
@@ -566,9 +571,9 @@ class ModelMetricService:
                     "Remember: ONLY return the JSON object."
                 )
 
-                logging.info(f"[Code Quality] Calling LLM API...")
+                # logging.info(f"[Code Quality] Calling LLM API...")
                 response = self.llm_manager.call_genai_api(prompt)
-                logging.info(f"[Code Quality] LLM response received")
+                # logging.info(f"[Code Quality] LLM response received")
 
                 obj = json.loads(response.content)
 
@@ -578,7 +583,7 @@ class ModelMetricService:
                     "has_documentation": bool(obj.get("has_documentation", False)),
                     "notes": str(obj.get("notes", ""))[:400],
                 }
-                logging.info(f"[Code Quality] LLM analysis successful: {result}")
+                # logging.info(f"[Code Quality] LLM analysis successful: {result}")
                 return result
 
             except Exception as e:
@@ -854,8 +859,10 @@ class ModelMetricService:
                 card = str(card_obj)
             
             text = (readme + "\n\n" + card).strip()
-            if len(text) > 16000:
-                text = text[:16000] + "\n\n...[truncated]..."
+            # Smart truncation: ramp-up focuses on beginning (quick-start, examples)
+            if len(text) > 8000:
+                # Take first 7000 (quick-start is at top) + last 1000 (might have examples)
+                text = text[:7000] + "\n\n...[truncated]...\n\n" + text[-1000:]
             return text
 
         def prepare_llm_prompt(data: Model) -> str:
@@ -888,7 +895,8 @@ class ModelMetricService:
                 "- 0.6-0.8: Good coverage with installation, usage, examples\n"
                 "- 0.9-1.0: Comprehensive docs with API reference, tutorials\n\n"
                 "When uncertain, prefer higher scores. Good projects should score 0.7-0.9.\n\n"
-                f"ANALYZE THIS DOCUMENTATION:\n{text[:6000]}\n\n"
+                # Use full text (already smartly truncated in prepare_llm_prompt)
+                f"ANALYZE THIS DOCUMENTATION:\n{text}\n\n"
                 "RESPOND WITH JSON ONLY (no markdown, no commentary):"
             )
 
@@ -928,14 +936,14 @@ class ModelMetricService:
             }
 
         try:
-            logging.info("[Ramp-Up Time] Starting evaluation...")
+            # logging.info("[Ramp-Up Time] Starting evaluation...")
             
             prompt = prepare_llm_prompt(Data)
-            logging.info(f"[Ramp-Up Time] Prepared prompt (length: {len(prompt) if prompt else 0})")
+            # logging.info(f"[Ramp-Up Time] Prepared prompt (length: {len(prompt) if prompt else 0})")
             
             # Handle case with no documentation
             if not prompt:
-                logging.warning("[Ramp-Up Time] No documentation found, returning 0.0")
+                # logging.warning("[Ramp-Up Time] No documentation found, returning 0.0")
                 return MetricResult(
                     metric_type=MetricType.RAMP_UP_TIME,
                     value=0.0,
@@ -943,24 +951,23 @@ class ModelMetricService:
                     latency_ms=0,
                 )
             
-            logging.info("[Ramp-Up Time] Calling LLM API...")
+            # logging.info("[Ramp-Up Time] Calling LLM API...")
             response = self.llm_manager.call_genai_api(prompt)
-            logging.info(f"[Ramp-Up Time] LLM response received")
-            logging.info(f"[Ramp-Up Time] Response content: {repr(response.content[:500])}")
+            # logging.info(f"[Ramp-Up Time] LLM response received")
+            # logging.info(f"[Ramp-Up Time] Response content: {repr(response.content[:500])}")
             
-            logging.info("[Ramp-Up Time] Parsing LLM response...")
+            # logging.info("[Ramp-Up Time] Parsing LLM response...")
             parsed = parse_llm_response(response.content)
-            logging.info(f"[Ramp-Up Time] Parsed result: {parsed}")
+            # logging.info(f"[Ramp-Up Time] Parsed result: {parsed}")
 
             # Calculate weighted average (50% each component)
             score = (parsed["quality_of_example_code"] * 0.5 +
                     parsed["readme_coverage"] * 0.5)
-            logging.debug(f"[Ramp-Up Time] Calculated score before clamping: {score}")
-
-            # Ensure final score is in [0.0, 1.0] and round to avoid floating point errors
+            # logging.debug(f"[Ramp-Up Time] Calculated score before clamping: {score}")
+            
+            # Ensure final score is in [0.0, 1.0]
             score = max(0.0, min(1.0, score))
-            score = round(score, 3)  # Round to 3 decimal places
-            logging.info(f"[Ramp-Up Time] Final score: {score}")
+            # logging.info(f"[Ramp-Up Time] Final score: {score}")
 
             details = {"mode": "llm", **parsed}
 
