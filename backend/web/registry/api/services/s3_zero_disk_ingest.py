@@ -419,13 +419,20 @@ class S3ZeroDiskIngest:
                 for commit in commits:
                     # GitCommitInfo has: commit_id, authors (list), created_at, title
                     # Extract author names from the authors list
+                    # Authors can be: strings, dicts with 'user' key, or objects with .user attribute
                     authors = []
                     if hasattr(commit, 'authors') and commit.authors:
                         for author in commit.authors:
-                            if isinstance(author, dict) and 'user' in author:
+                            if isinstance(author, str):
+                                # Simple string username
+                                authors.append(author)
+                                unique_authors.add(author)
+                            elif isinstance(author, dict) and 'user' in author:
+                                # Dictionary with 'user' key
                                 authors.append(author['user'])
                                 unique_authors.add(author['user'])
                             elif hasattr(author, 'user'):
+                                # Object with .user attribute
                                 authors.append(author.user)
                                 unique_authors.add(author.user)
 
