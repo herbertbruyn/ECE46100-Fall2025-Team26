@@ -300,7 +300,6 @@ class AsyncIngestService:
                     models_to_link = Artifact.objects.filter(
                         type="model",
                         code_name__icontains=artifact.name,
-                        code_name__icontains=artifact.name,
                         code__isnull=True                    
                         )
                     for model_artifact in models_to_link:
