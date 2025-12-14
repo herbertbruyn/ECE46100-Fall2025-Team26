@@ -606,6 +606,8 @@ class S3ZeroDiskIngest:
         """
         Download Kaggle dataset and stream directly to S3 as ZIP.
 
+        For large datasets (>5GB), downloads only metadata to avoid excessive storage costs.
+
         Args:
             repo_id: Kaggle dataset identifier (username/dataset-name)
             output_zip_key: S3 key for output ZIP file
@@ -619,6 +621,9 @@ class S3ZeroDiskIngest:
 
         logger.info(f"Downloading Kaggle dataset to S3: {repo_id}")
 
+        # Size threshold: 5GB - datasets larger than this get metadata-only download
+        SIZE_THRESHOLD_BYTES = 5 * 1024 * 1024 * 1024  # 5GB
+
         try:
             # Initialize Kaggle API
             api = KaggleApi()
@@ -630,6 +635,27 @@ class S3ZeroDiskIngest:
                 raise ValueError(f"Invalid Kaggle dataset ID format: {repo_id}")
 
             owner, dataset_name = parts
+
+            # Get dataset metadata to check size
+            try:
+                dataset_metadata = api.dataset_metadata(owner, dataset_name)
+                # Calculate total size from files
+                total_size = 0
+                if hasattr(dataset_metadata, 'files') and dataset_metadata.files:
+                    for file_info in dataset_metadata.files:
+                        if hasattr(file_info, 'totalBytes'):
+                            total_size += file_info.totalBytes
+
+                logger.info(f"Kaggle dataset {repo_id} total size: {total_size / (1024*1024):.2f} MB")
+
+                # If dataset is too large, download metadata only
+                if total_size > SIZE_THRESHOLD_BYTES:
+                    logger.info(f"Dataset exceeds {SIZE_THRESHOLD_BYTES / (1024*1024*1024):.1f}GB threshold - downloading metadata only")
+                    return self._create_kaggle_metadata_zip(api, owner, dataset_name, dataset_metadata, output_zip_key)
+
+            except Exception as e:
+                logger.warning(f"Could not fetch dataset metadata, proceeding with full download: {e}")
+                # If we can't get metadata, proceed with full download
 
             # Create a temporary directory for Kaggle download
             # Note: Kaggle API doesn't support streaming, so we need temp storage
@@ -732,3 +758,153 @@ class S3ZeroDiskIngest:
         except Exception as e:
             logger.error(f"Failed to download Kaggle dataset {repo_id}: {e}")
             raise RuntimeError(f"Kaggle dataset download failed: {e}")
+
+    def _create_kaggle_metadata_zip(
+        self,
+        api,
+        owner: str,
+        dataset_name: str,
+        dataset_metadata,
+        output_zip_key: str
+    ) -> Tuple[str, int]:
+        """
+        Create a metadata-only ZIP for large Kaggle datasets.
+
+        Downloads only README and metadata information without downloading actual data files.
+
+        Args:
+            api: Authenticated Kaggle API instance
+            owner: Dataset owner username
+            dataset_name: Dataset name
+            dataset_metadata: Metadata object from Kaggle API
+            output_zip_key: S3 key for output ZIP file
+
+        Returns:
+            Tuple of (sha256_hash, size_bytes)
+        """
+        import json
+        import zipfile
+        import tempfile
+
+        logger.info(f"Creating metadata-only ZIP for {owner}/{dataset_name}")
+
+        try:
+            # Prepare metadata content
+            metadata_content = {
+                "dataset_id": f"{owner}/{dataset_name}",
+                "title": getattr(dataset_metadata, 'title', ''),
+                "subtitle": getattr(dataset_metadata, 'subtitle', ''),
+                "description": getattr(dataset_metadata, 'description', ''),
+                "license_name": getattr(dataset_metadata, 'licenseName', ''),
+                "keywords": getattr(dataset_metadata, 'keywords', []),
+                "collaborators": getattr(dataset_metadata, 'collaborators', []),
+                "files": [],
+                "note": "This is a metadata-only download. Dataset exceeded 5GB size threshold."
+            }
+
+            # Add file list with sizes
+            if hasattr(dataset_metadata, 'files') and dataset_metadata.files:
+                total_size = 0
+                for file_info in dataset_metadata.files:
+                    file_entry = {
+                        "name": getattr(file_info, 'name', 'unknown'),
+                        "size_bytes": getattr(file_info, 'totalBytes', 0),
+                        "creation_date": str(getattr(file_info, 'creationDate', '')),
+                        "url": getattr(file_info, 'url', '')
+                    }
+                    metadata_content["files"].append(file_entry)
+                    total_size += file_entry["size_bytes"]
+
+                metadata_content["total_size_bytes"] = total_size
+                metadata_content["total_size_gb"] = round(total_size / (1024**3), 2)
+
+            # Try to download README if available
+            readme_content = None
+            with tempfile.TemporaryDirectory() as temp_dir:
+                try:
+                    # Download dataset files to get README
+                    api.dataset_download_files(
+                        dataset=f"{owner}/{dataset_name}",
+                        path=temp_dir,
+                        unzip=True
+                    )
+
+                    # Look for README files
+                    import os
+                    for root, dirs, files in os.walk(temp_dir):
+                        for file in files:
+                            if file.lower().startswith('readme'):
+                                readme_path = os.path.join(root, file)
+                                try:
+                                    with open(readme_path, 'r', encoding='utf-8', errors='ignore') as f:
+                                        readme_content = f.read()
+                                    logger.info(f"Found README: {file}")
+                                    break
+                                except Exception as e:
+                                    logger.warning(f"Failed to read README {file}: {e}")
+                        if readme_content:
+                            break
+
+                except Exception as e:
+                    logger.warning(f"Could not download files for README extraction: {e}")
+
+            # Create in-memory ZIP with metadata
+            zip_buffer = io.BytesIO()
+            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+                # Add metadata JSON
+                zf.writestr('kaggle_metadata.json', json.dumps(metadata_content, indent=2))
+
+                # Add README if found
+                if readme_content:
+                    zf.writestr('README.md', readme_content)
+                else:
+                    # Create a basic README
+                    basic_readme = f"""# {metadata_content.get('title', 'Kaggle Dataset')}
+
+{metadata_content.get('description', '')}
+
+## Metadata-Only Download
+
+This dataset exceeded the 5GB size threshold and was downloaded as metadata-only.
+
+**Total Size:** {metadata_content.get('total_size_gb', 0)} GB
+**Files:** {len(metadata_content.get('files', []))}
+
+**License:** {metadata_content.get('license_name', 'Unknown')}
+
+For full dataset access, visit: https://www.kaggle.com/datasets/{owner}/{dataset_name}
+
+## File List
+"""
+                    for file_info in metadata_content.get('files', []):
+                        basic_readme += f"\n- {file_info['name']} ({file_info['size_bytes'] / (1024*1024):.2f} MB)"
+
+                    zf.writestr('README.md', basic_readme)
+
+                # Add file list as separate file for easy parsing
+                file_list_content = "\n".join([f"{f['name']}\t{f['size_bytes']}" for f in metadata_content.get('files', [])])
+                zf.writestr('file_list.txt', file_list_content)
+
+            # Get ZIP bytes
+            zip_bytes = zip_buffer.getvalue()
+            total_size = len(zip_bytes)
+            sha256_hash = hashlib.sha256(zip_bytes)
+
+            # Upload to S3 in single part (metadata ZIPs are small)
+            logger.info(f"Uploading metadata ZIP to S3: {output_zip_key} ({total_size} bytes)")
+
+            self.s3_client.put_object(
+                Bucket=self.bucket,
+                Key=output_zip_key,
+                Body=zip_bytes,
+                ContentType='application/zip'
+            )
+
+            hash_hex = sha256_hash.hexdigest()
+            logger.info(f"Metadata-only ZIP created: {output_zip_key} ({total_size} bytes), SHA256: {hash_hex[:16]}...")
+
+            return hash_hex, total_size
+
+        except Exception as e:
+            logger.error(f"Failed to create metadata ZIP for {owner}/{dataset_name}: {e}")
+            raise RuntimeError(f"Metadata ZIP creation failed: {e}")
