@@ -189,10 +189,17 @@ class Artifact(models.Model):
     ]
     
     STATUS_CHOICES = [
+        ("pending_rating", "Pending Rating"),      # 202 returned, waiting for worker
+        ("rating_in_progress", "Rating In Progress"),  # Worker is rating
+        ("disqualified", "Disqualified"),          # Failed quality gate (< 0.5)
+        ("ingesting", "Ingesting Artifact"),       # Passed rating, downloading to S3
+        ("ready", "Ready"),                        # Fully ingested and available
+        ("failed", "Failed"),                      # Hard error during processing
+        # Legacy statuses for backward compatibility
         ("pending", "Pending"),
+        ("downloading", "Downloading"),
         ("rating", "Rating"),
         ("completed", "Completed"),
-        ("failed", "Failed"),
         ("rejected", "Rejected"),
     ]
 
@@ -213,13 +220,21 @@ class Artifact(models.Model):
     
     # Storage
     blob = models.FileField(upload_to="registry/raw/", blank=True)
+    s3_key = models.CharField(max_length=512, blank=True, null=True)  # S3 object key
+    download_url = models.TextField(blank=True, null=True)  # Presigned URL (can be very long)
     sha256 = models.CharField(max_length=64, blank=True, db_index=True)
+    sha256_hash = models.CharField(max_length=64, blank=True, null=True)  # Alias for compatibility
+    file_size = models.BigIntegerField(default=0, null=True, blank=True)  # Alias for size_bytes
     size_bytes = models.BigIntegerField(default=0)
     
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     rating_completed_at = models.DateTimeField(blank=True, null=True)
+
+    # Ratings (stored directly in artifact for S3 pipeline)
+    rating_scores = models.JSONField(blank=True, null=True)  # Dict of metric scores
+    net_score = models.FloatField(blank=True, null=True)  # Overall rating score
 
     # Foreign keys
     dataset_name = models.CharField(max_length=256, blank=True, null=True)

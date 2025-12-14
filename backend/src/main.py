@@ -86,17 +86,17 @@ def run_evaluations_parallel(model_data, max_workers: int = 4) -> \
         Dict[str, Tuple[MetricResult, float]]:
     """
     Run all evaluations in parallel using ThreadPoolExecutor and time each one.
-    
+
     Args:
         model_data: The model data to evaluate
         max_workers: Maximum number of worker threads (default: 4)
-        
+
     Returns:
         Dictionary mapping evaluation names to (result, time) tuples
     """
     service = ModelMetricService()
     results = {}
-    
+
     # Define all evaluations
     evaluations = [
         ("Performance Claims", service.EvaluatePerformanceClaims),
@@ -106,7 +106,8 @@ def run_evaluations_parallel(model_data, max_workers: int = 4) -> \
         ("Availability", service.EvaluateDatasetAndCodeAvailabilityScore),
         ("Code Quality", service.EvaluateCodeQuality),
         ("Dataset Quality", service.EvaluateDatasetsQuality),
-        ("License", service.EvaluateLicense)
+        ("License", service.EvaluateLicense),
+        ("Reproducibility", service.EvaluateReproducibility)
     ]
     
     logging.info(f"Running evaluations in parallel "

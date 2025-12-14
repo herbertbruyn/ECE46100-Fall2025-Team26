@@ -31,7 +31,18 @@ if SECRET_KEY is None:
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv("DJANGO_DEBUG", "1") == "1"
 
-ALLOWED_HOSTS = os.getenv("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
+ALLOWED_HOSTS = []
+hosts = os.getenv("ALLOWED_HOSTS")
+if not hosts:
+    raise RuntimeError("ALLOWED_HOSTS is required in production")
+hosts = hosts.split(",")
+for h in hosts:
+    ALLOWED_HOSTS.append(h)
+print("ALLOWED HOSTS: ")
+for h in ALLOWED_HOSTS:
+    print(h)
+print("------------------")
+
 
 # Application definition
 
@@ -85,18 +96,23 @@ WSGI_APPLICATION = 'registry.wsgi.application'
 # https://docs.djangoproject.com/en/5.1/ref/settings/#databases
 
 # Switch DB by env var. If POSTGRES_HOST is present -> use Postgres; else SQLite for dev.
-if os.getenv("POSTGRES_HOST"):
+postgres_host = os.getenv("POSTGRES_HOST")
+if postgres_host:
+    # Helper to strip accidental quotes from .env files
+    def clean(val):
+        return val.strip().strip("'").strip('"') if val else val
+
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.postgresql",
-            "NAME": os.getenv("POSTGRES_DB", "registry"),
-            "USER": os.getenv("POSTGRES_USER", "registry"),
-            "PASSWORD": os.getenv("POSTGRES_PASSWORD", ""),
-            "HOST": os.getenv("POSTGRES_HOST"),
-            "PORT": os.getenv("POSTGRES_PORT", "5432"),
+            "NAME": clean(os.getenv("POSTGRES_DB", "registry")),
+            "USER": clean(os.getenv("POSTGRES_USER", "registry")),
+            "PASSWORD": clean(os.getenv("POSTGRES_PASSWORD", "")),
+            "HOST": clean(postgres_host),
+            "PORT": clean(os.getenv("POSTGRES_PORT", "5432")),
             "OPTIONS": {
                 # RDS usually supports TLS; "require" is a safe default
-                "sslmode": os.getenv("POSTGRES_SSLMODE", "require")
+                "sslmode": clean(os.getenv("POSTGRES_SSLMODE", "require"))
             },
         }
     }

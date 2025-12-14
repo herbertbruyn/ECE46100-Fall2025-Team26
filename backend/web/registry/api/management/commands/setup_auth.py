@@ -73,7 +73,7 @@ class Command(BaseCommand):
         if created:
             # Set the password from spec example
             admin_user.set_password(
-                "correcthorsebatterystaple123(!__+@**(A'\"`;DROP TABLE artifacts;"
+                "correcthorsebatterystaple123(!__+@**(A'\"`;DROP TABLE packages;"
             )
             admin_user.save()
             

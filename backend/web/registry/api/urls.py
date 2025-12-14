@@ -29,9 +29,18 @@ urlpatterns = [
     # List endpoint
     path("artifacts", views.artifacts_list),
     
+    # Tracks endpoint
+    path("tracks", views.tracks),
+    
     # Cost endpoint
     re_path(
         r"^artifact/(?P<artifact_type>(model|dataset|code))/(?P<id>\d+)/cost$",
         views.artifact_cost
     ),
+
+    # Lineage endpoint
+    path("artifact/model/<int:id>/lineage", views.artifact_lineage),
+
+    # License check endpoint
+    path("artifact/model/<int:id>/license-check", views.artifact_license_check)
 ]
