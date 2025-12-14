@@ -201,6 +201,8 @@ class ModelMetricService:
         try:
             n_contrib = _contributors_count(Data)
             last_ts = _latest_commit_ts(Data)
+            
+            logging.info(f"Bus Factor: Found {n_contrib} contributors, last commit: {last_ts}")
 
             c_score = _contributors_score(n_contrib)
             r_score = _recency_score(last_ts)
