@@ -63,9 +63,13 @@ class S3ZeroDiskIngest:
 
         # Check if this is a GitHub repo (for code artifacts)
         is_github = source_url and 'github.com' in source_url
+        is_kaggle = source_url and 'kaggle.com' in source_url
 
         if is_github:
             return self._download_github_repo_to_s3(repo_id, output_zip_key, revision)
+
+        if is_kaggle:
+            return self._download_kaggle_dataset_to_s3(repo_id, output_zip_key)
 
         hf_api = HfApi()
 
@@ -597,3 +601,134 @@ class S3ZeroDiskIngest:
         except ClientError as e:
             logger.error(f"Failed to generate presigned URL: {e}")
             return None
+
+    def _download_kaggle_dataset_to_s3(self, repo_id: str, output_zip_key: str) -> Tuple[str, int]:
+        """
+        Download Kaggle dataset and stream directly to S3 as ZIP.
+
+        Args:
+            repo_id: Kaggle dataset identifier (username/dataset-name)
+            output_zip_key: S3 key for output ZIP file
+
+        Returns:
+            Tuple of (sha256_hash, size_bytes)
+        """
+        import tempfile
+        import zipfile
+        from kaggle.api.kaggle_api_extended import KaggleApi
+
+        logger.info(f"Downloading Kaggle dataset to S3: {repo_id}")
+
+        try:
+            # Initialize Kaggle API
+            api = KaggleApi()
+            api.authenticate()
+
+            # Parse owner and dataset name
+            parts = repo_id.split('/')
+            if len(parts) != 2:
+                raise ValueError(f"Invalid Kaggle dataset ID format: {repo_id}")
+
+            owner, dataset_name = parts
+
+            # Create a temporary directory for Kaggle download
+            # Note: Kaggle API doesn't support streaming, so we need temp storage
+            with tempfile.TemporaryDirectory() as temp_dir:
+                logger.info(f"Downloading Kaggle dataset {repo_id} to temp: {temp_dir}")
+
+                # Download dataset files to temp directory
+                api.dataset_download_files(
+                    dataset=repo_id,
+                    path=temp_dir,
+                    unzip=True  # Unzip Kaggle's zip so we can re-zip for S3
+                )
+
+                # List all downloaded files
+                import os
+                files_to_zip = []
+                for root, dirs, files in os.walk(temp_dir):
+                    for file in files:
+                        file_path = os.path.join(root, file)
+                        # Get relative path from temp_dir
+                        rel_path = os.path.relpath(file_path, temp_dir)
+                        files_to_zip.append((file_path, rel_path))
+
+                logger.info(f"Found {len(files_to_zip)} files to upload to S3")
+
+                # Initialize multipart upload to S3
+                upload_id = self.s3_client.create_multipart_upload(
+                    Bucket=self.bucket,
+                    Key=output_zip_key,
+                    ContentType='application/zip'
+                )['UploadId']
+
+                try:
+                    parts = []
+                    part_number = 1
+                    buffer = bytearray()
+                    sha256_hash = hashlib.sha256()
+                    total_size = 0
+                    chunk_size = 10 * 1024 * 1024  # 10MB chunks
+
+                    # Create ZIP in memory and stream to S3
+                    zip_buffer = io.BytesIO()
+
+                    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+                        for file_path, arcname in files_to_zip:
+                            logger.info(f"Adding to ZIP: {arcname}")
+                            zf.write(file_path, arcname=arcname)
+
+                    # Get ZIP bytes
+                    zip_bytes = zip_buffer.getvalue()
+                    total_size = len(zip_bytes)
+                    sha256_hash.update(zip_bytes)
+
+                    # Upload ZIP to S3 in chunks
+                    for i in range(0, total_size, chunk_size):
+                        chunk = zip_bytes[i:i + chunk_size]
+
+                        part_response = self.s3_client.upload_part(
+                            Bucket=self.bucket,
+                            Key=output_zip_key,
+                            PartNumber=part_number,
+                            UploadId=upload_id,
+                            Body=bytes(chunk)
+                        )
+
+                        parts.append({
+                            'PartNumber': part_number,
+                            'ETag': part_response['ETag']
+                        })
+
+                        part_number += 1
+                        logger.info(f"Uploaded part {part_number - 1}, size: {len(chunk)} bytes")
+
+                    # Complete multipart upload
+                    self.s3_client.complete_multipart_upload(
+                        Bucket=self.bucket,
+                        Key=output_zip_key,
+                        UploadId=upload_id,
+                        MultipartUpload={'Parts': parts}
+                    )
+
+                    hash_hex = sha256_hash.hexdigest()
+                    logger.info(f"Multipart ZIP upload completed: {total_size} bytes, SHA256: {hash_hex[:16]}...")
+                    logger.info(f"Zero-disk ZIP created: {output_zip_key} ({total_size} bytes)")
+
+                    return hash_hex, total_size
+
+                except Exception as e:
+                    # Abort multipart upload on failure
+                    try:
+                        self.s3_client.abort_multipart_upload(
+                            Bucket=self.bucket,
+                            Key=output_zip_key,
+                            UploadId=upload_id
+                        )
+                    except:
+                        pass
+                    raise RuntimeError(f"Failed during S3 upload: {e}")
+
+        except Exception as e:
+            logger.error(f"Failed to download Kaggle dataset {repo_id}: {e}")
+            raise RuntimeError(f"Kaggle dataset download failed: {e}")

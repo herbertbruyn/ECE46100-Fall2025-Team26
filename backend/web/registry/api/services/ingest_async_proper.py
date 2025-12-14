@@ -233,7 +233,9 @@ class AsyncIngestService:
 
             # STEP 3: Ingest artifact to S3
             is_github = 'github.com' in source_url
-            logger.info(f"INGESTING: Streaming {'GitHub' if is_github else 'HuggingFace'} repo to S3...")
+            is_kaggle = 'kaggle.com' in source_url
+            source_type = 'GitHub' if is_github else ('Kaggle' if is_kaggle else 'HuggingFace')
+            logger.info(f"INGESTING: Streaming {source_type} repo to S3...")
             artifact.status = "ingesting"
             artifact.save()
 
@@ -324,7 +326,7 @@ class AsyncIngestService:
                 pass
 
     def _parse_repo_id(self, source_url: str) -> Optional[str]:
-        """Extract repo_id from HuggingFace or GitHub URL"""
+        """Extract repo_id from HuggingFace, GitHub, or Kaggle URL"""
         url = source_url.rstrip('/')
 
         # Handle HuggingFace URLs
@@ -344,6 +346,15 @@ class AsyncIngestService:
                 if repo_name.endswith('.git'):
                     repo_name = repo_name[:-4]
                 return f"{parts[0]}/{repo_name}"
+            return None
+
+        # Handle Kaggle URLs for datasets
+        # Format: https://www.kaggle.com/datasets/username/dataset-name
+        if 'kaggle.com/' in url:
+            parts = url.split('kaggle.com/')[-1].split('/')
+            if len(parts) >= 3 and parts[0] == 'datasets':
+                # Return username/dataset-name
+                return f"{parts[1]}/{parts[2]}"
             return None
 
         return None
