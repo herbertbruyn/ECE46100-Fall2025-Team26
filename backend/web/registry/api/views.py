@@ -564,7 +564,17 @@ def artifact_by_regex(request):
     matching_artifacts = [a for a in all_ready if rx.search(a.name)]
     results = [a.metadata_view() for a in matching_artifacts]
 
-    sys.stderr.write(f"DEBUG: Regex '{pattern}' returned {len(results)} artifacts after {elapsed}s wait\n")
+    # Debug output
+    sys.stderr.write("=" * 80 + "\n")
+    sys.stderr.write(f"POST /artifact/byRegEx DEBUG\n")
+    sys.stderr.write(f"Regex pattern: '{pattern}'\n")
+    sys.stderr.write(f"Wait time: {elapsed}s\n")
+    sys.stderr.write(f"Total artifacts in DB (ready/completed): {all_ready.count()}\n")
+    sys.stderr.write(f"Artifact names in DB: {[a.name for a in all_ready]}\n")
+    sys.stderr.write(f"Matching count: {len(matching_artifacts)}\n")
+    sys.stderr.write(f"Matching names: {[a.name for a in matching_artifacts]}\n")
+    sys.stderr.write(f"Response status: {'200' if results else '404'}\n")
+    sys.stderr.write("=" * 80 + "\n")
     sys.stderr.flush()
 
     # Log search activity
