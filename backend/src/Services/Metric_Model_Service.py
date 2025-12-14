@@ -166,31 +166,45 @@ class ModelMetricService:
 
     def EvaluateBusFactor(self, Data: Model) -> MetricResult:
         def _contributors_score(contrib_count: int) -> float:
+            """
+            Score based on number of contributors.
+            For ML models, small teams are acceptable (unlike large software projects).
+            """
             if contrib_count >= 7:
-                return 1.0
+                return 1.0  # Large team
             if 4 <= contrib_count <= 6:
-                return 0.7
+                return 0.8  # Medium team
             if 2 <= contrib_count <= 3:
-                return 0.5
+                return 0.6  # Small team (common for ML models)
             if contrib_count == 1:
-                return 0.3
-            return 0.0
+                return 0.5  # Solo researcher (acceptable for ML)
+            return 0.0  # No contributors (problematic)
 
         def _recency_score(last_commit: Optional[datetime]) -> float:
+            """
+            Score based on last commit recency.
+            For ML models, old commits are acceptable (stable models don't need updates).
+            More lenient than code projects.
+            """
             if last_commit is None:
-                return 0.0
+                return 0.5  # Neutral if no commit data
+
             now = datetime.now(timezone.utc)
             months = _months_between(now, last_commit)
-            if months < 3.0:
-                return 1.0
-            score = 1.0 - 0.1 * (months - 3.0)
-            if months > 12.0:
-                return 0.0
-            if score < 0.0:
-                return 0.0
-            if score > 1.0:
-                return 1.0
-            return score
+
+            # Very lenient scoring for model artifacts
+            if months < 6.0:
+                return 1.0  # Recent update
+            elif months < 12.0:
+                return 0.9  # Updated in last year
+            elif months < 24.0:
+                return 0.8  # Updated in last 2 years
+            elif months < 36.0:
+                return 0.7  # Updated in last 3 years
+            else:
+                return 0.6  # Stable model (no penalty for old commits)
+
+            # Note: Even old models get 0.6 minimum - stable is good!
 
         def _latest_commit_ts(data: Model) -> Optional[datetime]:
             commits = getattr(data, "repo_commit_history", [])
