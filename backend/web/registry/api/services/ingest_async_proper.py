@@ -92,10 +92,9 @@ class AsyncIngestService:
 
         # Create artifact with pending_rating status
         with transaction.atomic():
-
-            artifact_name = repo_id.replace('/', '-')
             artifact = Artifact.objects.create(
-                name=artifact_name,                source_url=source_url,
+                name=repo_id.split('/')[-1],
+                source_url=source_url,
                 type=artifact_type,
                 status="pending_rating",  # Waiting for background worker
                 uploaded_by=uploaded_by
@@ -278,14 +277,13 @@ class AsyncIngestService:
                     # Find models that have this dataset name in their dataset_name field
                     from api.models import find_or_create_dataset
                     dataset_obj = find_or_create_dataset(artifact.name)
-                    dataset_name_with_slash = artifact.name.replace('-', '/', 1) if '-' in artifact.name else artifact.name
-                    from django.db.models import Q
+
                     # Update all models that reference this dataset by name
                     models_to_link = Artifact.objects.filter(
                         type="model",
-                        dataset__isnull=True,
                         dataset_name__icontains=artifact.name,
-                                            )
+                        dataset__isnull=True  # Only link models that don't already have a dataset linked
+                    )
                     for model_artifact in models_to_link:
                         model_artifact.dataset = dataset_obj
                         model_artifact.save()
@@ -295,14 +293,13 @@ class AsyncIngestService:
                     # Find models that have this code name in their code_name field
                     from api.models import find_or_create_code
                     code_obj = find_or_create_code(artifact.name)
-                    from django.db.models import Q
+
                     # Update all models that reference this code by name
                     models_to_link = Artifact.objects.filter(
                         type="model",
                         code_name__icontains=artifact.name,
-                        code_name__icontains=artifact.name,
-                        code__isnull=True                    
-                        )
+                        code__isnull=True  # Only link models that don't already have a code linked
+                    )
                     for model_artifact in models_to_link:
                         model_artifact.code = code_obj
                         model_artifact.save()
@@ -618,10 +615,11 @@ class AsyncIngestService:
                 return 0.5
             
             from api.models import Artifact
-            parent_name = parent_model_id.replace('/', '-')            
+            parent_name = parent_model_id.split('/')[-1] if '/' in parent_model_id else parent_model_id
+            
             parent_artifact = Artifact.objects.filter(
                 type="model",
-                name=parent_name,
+                name__icontains=parent_name,
                 status="ready"
             ).exclude(id=artifact_id).first()
             
