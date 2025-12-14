@@ -16,18 +16,12 @@ class LLMResponse:
 class LLMManager:
     def __init__(self):
         """Initialize the LLM Manager with Purdue GenAI Studio API."""
-        logging.info("Initializing LLM Manager...")
         
         self.api_key = os.getenv("GEN_AI_STUDIO_API_KEY")
         if not self.api_key:
-            logging.error("GEN_AI_STUDIO_API_KEY environment variable not found")
             raise ValueError(
                 "GEN_AI_STUDIO_API_KEY not configured. Cannot make API calls."
             )
-        
-        # Log successful initialization (mask most of the key for security)
-        masked_key = f"{self.api_key[:8]}...{self.api_key[-4:]}" if len(self.api_key) > 12 else "***"
-        logging.info(f"LLM Manager initialized successfully with API key: {masked_key}")
 
     def call_genai_api(self, prompt: str, model: Optional[str] = None
                        ) -> LLMResponse:
@@ -44,12 +38,6 @@ class LLMManager:
         model_name = model or "llama3.1:latest"
         url = "https://genai.rcac.purdue.edu/api/chat/completions"
         
-        # Log the API call details
-        prompt_preview = prompt[:200] + "..." if len(prompt) > 200 else prompt
-        logging.info(f"[LLM] Making API call to Purdue GenAI Studio")
-        logging.info(f"[LLM] Model: {model_name}")
-        logging.info(f"[LLM] Prompt length: {len(prompt)} characters")
-        logging.debug(f"[LLM] Prompt preview: {prompt_preview}")
         
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -75,42 +63,28 @@ class LLMManager:
         }
         
         try:
-            logging.info(f"[LLM] Sending POST request to {url}")
             response = requests.post(url, headers=headers, json=body, timeout=30)
             
-            logging.info(f"[LLM] Response status code: {response.status_code}")
             
             if response.status_code == 200:
-                logging.info(f"[LLM] API call successful - parsing response")
                 
                 # Parse the JSON response
                 try:
                     response_data = response.json()
-                    logging.debug(f"[LLM] Response data structure: {list(response_data.keys())}")
                 except Exception as json_err:
-                    logging.error(f"[LLM] Failed to parse JSON response: {json_err}")
-                    logging.error(f"[LLM] Raw response text: {response.text[:500]}")
                     raise RuntimeError(f"Failed to parse LLM response as JSON: {json_err}")
                 
                 # Extract the content from the response
                 choices = response_data.get("choices", [])
-                logging.debug(f"[LLM] Number of choices in response: {len(choices)}")
                 
                 if choices and len(choices) > 0:
                     message = choices[0].get("message", {})
                     content = message.get("content", "")
-                    logging.info(f"[LLM] Extracted content length: {len(content)} characters")
-                    logging.debug(f"[LLM] Content preview: {content[:200]}")
                 else:
                     content = ""
-                    logging.warning("[LLM] No choices found in response, using empty content")
                 
                 # Extract usage stats if available
                 usage = response_data.get("usage", {})
-                if usage:
-                    logging.info(f"[LLM] Token usage: {usage}")
-                else:
-                    logging.debug("[LLM] No usage stats in response")
                 
                 # Get finish reason
                 finish_reason = "STOP"
