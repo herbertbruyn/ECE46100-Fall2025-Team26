@@ -256,14 +256,31 @@ def artifact_create(request, artifact_type: str):
 def artifact_details(request, artifact_type: str, id: int):
     """GET, PUT, DELETE /artifacts/{artifact_type}/{id}"""
     import time
+    
+    # Generate request ID for tracking
+    request_id = int(time.time() * 1000) % 10000000000000
+    client_ip = request.META.get('REMOTE_ADDR', 'unknown')
+    start_time = time.time()
+    
+    # Log incoming request
+    logging.info(f"{'='*80}")
+    logging.info(f"[{request_id}] {request.method} /artifacts/{artifact_type}/{id} from {client_ip}")
+    logging.info(f"  Searching for artifact: type='{artifact_type}', id={id}")
 
     try:
         obj = Artifact.objects.get(pk=id, type=artifact_type)
+        logging.info(f"  ✓ Found artifact: name='{obj.name}', status='{obj.status}'")
     except Artifact.DoesNotExist:
+        elapsed = time.time() - start_time
+        logging.info(f"  ✗ Artifact not found: type='{artifact_type}', id={id}")
+        logging.info(f"[{request_id}] {request.method} /artifacts/{artifact_type}/{id} → 404 ({elapsed:.3f}s)")
+        logging.info(f"{'='*80}")
         return Response({"detail": "Artifact not found"}, status=404)
 
     # Retrieve artifact details
     if request.method == "GET":
+        logging.info(f"  Checking artifact status for readiness...")
+        
         # CRITICAL: Block until artifact is ready (for autograder consistency)
         # Poll status up to 3 minutes (autograder timeout)
         max_wait = 170  # 170 seconds (safe margin under 3min autograder timeout)
@@ -271,7 +288,10 @@ def artifact_details(request, artifact_type: str, id: int):
 
         while obj.status in ["pending_rating", "rating_in_progress", "ingesting", "pending", "downloading", "rating"]:
             if time.time() - start_time > max_wait:
-                logging.warning(f"Timeout waiting for artifact {id} to be ready")
+                elapsed = time.time() - start_time
+                logging.warning(f"  ⏱ Timeout waiting for artifact {id} to be ready (waited {elapsed:.1f}s)")
+                logging.info(f"[{request_id}] GET /artifacts/{artifact_type}/{id} → 504 ({elapsed:.3f}s)")
+                logging.info(f"{'='*80}")
                 return Response({"detail": "Artifact processing timeout"}, status=504)
 
             time.sleep(1)  # Poll every 1 second
@@ -279,6 +299,10 @@ def artifact_details(request, artifact_type: str, id: int):
 
         # If disqualified or failed, return 404 (artifact not available)
         if obj.status in ["disqualified", "failed", "rejected"]:
+            elapsed = time.time() - start_time
+            logging.info(f"  ✗ Artifact has invalid status: '{obj.status}'")
+            logging.info(f"[{request_id}] GET /artifacts/{artifact_type}/{id} → 404 ({elapsed:.3f}s)")
+            logging.info(f"{'='*80}")
             return Response({"detail": "Artifact not found"}, status=404)
 
         # Now artifact is ready
@@ -442,31 +466,62 @@ def artifact_by_regex(request):
 # @require_auth
 def artifacts_list(request):
     """POST /artifacts"""
+    import time
+    
+    # Generate request ID for tracking
+    request_id = int(time.time() * 1000) % 10000000000000  # 13-digit timestamp-based ID
+    client_ip = request.META.get('REMOTE_ADDR', 'unknown')
+    start_time = time.time()
+    
+    # Log incoming request
+    logging.info(f"[{request_id}] POST /artifacts from {client_ip}")
+    
     queries = request.data
     if not isinstance(queries, list):
         return Response(
             {"detail": "Request body must be an array of queries"},
             status=400
         )
-
+    
+    # Log number of queries
+    logging.info(f"POST /artifacts: Processing {len(queries)} query(ies)")
+    
     results = []
-
-    for query in queries:
+    
+    for idx, query in enumerate(queries, 1):
         name = query.get("name", "*")
         artifact_type = query.get("type")
-
+        
+        # Build types list for logging
+        types_list = [artifact_type] if artifact_type else []
+        logging.info(f"Query {idx}: name='{name}', types={types_list}")
+        
         # Get only ready/completed artifacts (don't wait for in-progress ones)
         valid_statuses = ["ready", "completed"]
-
+        
         if name == "*":
             qs = Artifact.objects.filter(status__in=valid_statuses)
         else:
-            qs = Artifact.objects.filter(name__icontains=name, status__in=valid_statuses)
-
+            # Log the search type
+            logging.info(f"Searching for exact match: '{name}'")
+            
+            # Use exact match instead of substring match
+            qs = Artifact.objects.filter(name__iexact=name, status__in=valid_statuses)
+            
+            # Log the result count
+            count = qs.count()
+            if count > 0:
+                logging.info(f"✓ Exact match: {count} package(s)")
+            else:
+                logging.info(f"✗ No exact match found for '{name}'")
+        
         if artifact_type:
             qs = qs.filter(type=artifact_type)
-
+        
         results.extend([a.metadata_view() for a in qs])
+    
+    # Log total results
+    logging.info(f"POST /artifacts: Returning {len(results)} total")
     
     # Pagination
     offset = request.query_params.get("offset", 0)
@@ -481,6 +536,10 @@ def artifacts_list(request):
     response = Response(paginated, status=200)
     if len(results) > offset + page_size:
         response["offset"] = str(offset + page_size)
+    
+    # Log completion with timing
+    elapsed = time.time() - start_time
+    logging.info(f"[{request_id}] POST /artifacts → 200 ({elapsed:.3f}s)")
     
     return response
 
