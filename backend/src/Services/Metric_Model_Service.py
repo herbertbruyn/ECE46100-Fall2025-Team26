@@ -605,14 +605,20 @@ class ModelMetricService:
 
             llm_analysis = _analyze_code_with_llm(repo_contents)
 
+            # Scoring breakdown:
+            # - Tests: 0.3 (essential for quality)
+            # - Structure: 0.25 (organization)
+            # - Documentation: 0.25 (README, docs)
+            # - Dependency mgmt: 0.2 (requirements.txt, etc.)
             score = 0.0
             if has_tests:
-                score += 0.4
-
+                score += 0.3
             if llm_analysis["shows_good_structure"]:
-                score += 0.3
+                score += 0.25
+            if llm_analysis["has_documentation"]:
+                score += 0.25
             if has_dependency_mgmt:
-                score += 0.3
+                score += 0.2
 
             if score > 1.0:
                 score = 1.0
@@ -620,7 +626,8 @@ class ModelMetricService:
             details = {
                 "has_tests": has_tests,
                 "has_dependency_management": has_dependency_mgmt,
-                "lint_check_proxy": llm_analysis["shows_good_structure"],
+                "has_good_structure": llm_analysis["shows_good_structure"],
+                "has_documentation": llm_analysis["has_documentation"],
                 "llm_analysis": llm_analysis
             }
 
@@ -932,12 +939,13 @@ class ModelMetricService:
             logging.info(f"[Ramp-Up Time] Parsed result: {parsed}")
 
             # Calculate weighted average (50% each component)
-            score = (parsed["quality_of_example_code"] * 0.5 + 
+            score = (parsed["quality_of_example_code"] * 0.5 +
                     parsed["readme_coverage"] * 0.5)
             logging.debug(f"[Ramp-Up Time] Calculated score before clamping: {score}")
-            
-            # Ensure final score is in [0.0, 1.0]
+
+            # Ensure final score is in [0.0, 1.0] and round to avoid floating point errors
             score = max(0.0, min(1.0, score))
+            score = round(score, 3)  # Round to 3 decimal places
             logging.info(f"[Ramp-Up Time] Final score: {score}")
 
             details = {"mode": "llm", **parsed}
