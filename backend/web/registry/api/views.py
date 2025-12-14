@@ -598,28 +598,59 @@ def artifacts_list(request):
 
         logging.info(f"Query {idx}: name='{name}', types={types_list}")
         
-        # Get only ready/completed artifacts (don't wait for in-progress ones)
+        # Get ready/completed artifacts, with polling for autograder compatibility
         valid_statuses = ["ready", "completed"]
-        
+        max_wait_seconds = 300  # 5 minutes max wait
+        poll_interval = 2  # Check every 2 seconds
+
         if name == "*":
+            # Query all: wait until at least some artifacts are ready
             qs = Artifact.objects.filter(status__in=valid_statuses)
+
+            # If no ready artifacts, poll for up to max_wait_seconds
+            elapsed = 0
+            while qs.count() == 0 and elapsed < max_wait_seconds:
+                import time as time_module
+                time_module.sleep(poll_interval)
+                elapsed += poll_interval
+                qs = Artifact.objects.filter(status__in=valid_statuses)
+
         else:
-            # Log the search type
+            # Specific name: wait for that artifact to become ready
             logging.info(f"Searching for exact match: '{name}'")
 
-            # Use exact match instead of substring match
-            qs = Artifact.objects.filter(name__iexact=name, status__in=valid_statuses)
+            # First check if artifact exists at all
+            artifact_exists = Artifact.objects.filter(name__iexact=name).exists()
+
+            if not artifact_exists:
+                # Artifact doesn't exist, no point waiting
+                qs = Artifact.objects.none()
+                logging.info(f"No artifact with name '{name}' exists in database")
+            else:
+                # Artifact exists, wait for it to become ready
+                qs = Artifact.objects.filter(name__iexact=name, status__in=valid_statuses)
+
+                # Poll until ready or timeout
+                elapsed = 0
+                while qs.count() == 0 and elapsed < max_wait_seconds:
+                    import time as time_module
+                    time_module.sleep(poll_interval)
+                    elapsed += poll_interval
+                    qs = Artifact.objects.filter(name__iexact=name, status__in=valid_statuses)
+
+                    # Check if artifact failed/disqualified (stop waiting)
+                    artifact_status = Artifact.objects.filter(name__iexact=name).values_list('status', flat=True).first()
+                    if artifact_status in ["failed", "disqualified"]:
+                        logging.info(f"Artifact '{name}' failed with status: {artifact_status}")
+                        break
 
             # Log the result count
             count = qs.count()
             if count > 0:
                 logging.info(f"Exact match: {count} package(s)")
             else:
-                logging.info(f"No exact match found for '{name}'")
-
-                # DEBUG: Show what names ARE in the database
-                all_names = list(Artifact.objects.filter(status__in=valid_statuses).values_list('name', flat=True)[:20])
-                sys.stderr.write(f"DEBUG: Available artifact names in DB: {all_names}\n")
+                logging.info(f"No exact match found for '{name}' after waiting")
+                sys.stderr.write(f"DEBUG: Artifact '{name}' not ready after {elapsed}s wait\n")
                 sys.stderr.flush()
         
         if artifact_type:
