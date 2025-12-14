@@ -417,21 +417,31 @@ class S3ZeroDiskIngest:
                 commit_data = []
                 unique_authors = set()
                 for commit in commits:
+                    # GitCommitInfo has: commit_id, authors (list), created_at, title
+                    # Extract author names from the authors list
+                    authors = []
+                    if hasattr(commit, 'authors') and commit.authors:
+                        for author in commit.authors:
+                            if isinstance(author, dict) and 'user' in author:
+                                authors.append(author['user'])
+                                unique_authors.add(author['user'])
+                            elif hasattr(author, 'user'):
+                                authors.append(author.user)
+                                unique_authors.add(author.user)
+
                     commit_info = {
-                        'commit_id': commit.commit_id,
-                        'date': str(commit.created_at),
-                        'author': commit.author if hasattr(commit, 'author') else 'unknown',
+                        'commit_id': commit.commit_id if hasattr(commit, 'commit_id') else '',
+                        'date': str(commit.created_at) if hasattr(commit, 'created_at') else '',
+                        'authors': authors,
                         'title': commit.title if hasattr(commit, 'title') else ''
                     }
                     commit_data.append(commit_info)
-                    if hasattr(commit, 'author') and commit.author:
-                        unique_authors.add(commit.author)
 
                 result['_hf_commit_history'] = json.dumps(commit_data).encode('utf-8')
                 result['_hf_contributors_count'] = json.dumps({'count': len(unique_authors)}).encode('utf-8')
-                logger.debug(f"Fetched {len(commit_data)} commits, {len(unique_authors)} unique contributors")
+                logger.info(f"[BUS_FACTOR] Fetched {len(commit_data)} commits, {len(unique_authors)} unique contributors")
             except Exception as e:
-                logger.warning(f"Failed to fetch commit history: {e}")
+                logger.warning(f"[BUS_FACTOR] Failed to fetch commit history: {e}")
 
             # 4. Get file list structure (for code quality)
             try:

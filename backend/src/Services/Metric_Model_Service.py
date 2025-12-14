@@ -338,7 +338,16 @@ class ModelMetricService:
 
     def EvaluateDatasetAndCodeAvailabilityScore(self,
                                                 Data: Model) -> MetricResult:
-        def _compose_source_text(data: Model) -> str:
+        """
+        Evaluate dataset and code availability using regex patterns (NO LLM)
+        Scoring:
+        - lists_training_datasets: 0.3 points
+        - links_to_huggingface_datasets: 0.3 points
+        - links_to_code_repo: 0.4 points
+        """
+        import re
+
+        def _get_readme_content(data: Model) -> str:
             readme = ""
             path = getattr(data, "readme_path", None)
             if path:
@@ -347,85 +356,59 @@ class ModelMetricService:
                         readme = fh.read()
                 except Exception:
                     readme = ""
-            card = ""
-            card_obj = getattr(data, "card", None)
-            if card_obj is not None:
-                card = str(card_obj)
-            text = (readme + "\n\n" + card).strip()
-            if len(text) > 16000:
-                text = text[:16000] + "\n\n...[truncated]..."
-            return text
-
-        def prepare_llm_prompt(data: Model) -> str:
-            assert isinstance(data, Model)
-            text = _compose_source_text(data)
-            return (
-                "OUTPUT FORMAT: JSON ONLY\n\n"
-                "Check for dataset and code references. "
-                "Return this JSON format:\n\n"
-                "{\n"
-                '  "lists_training_datasets": true,\n'
-                '  "links_to_huggingface_datasets": false,\n'
-                '  "links_to_code_repo": true,\n'
-                '  "notes": "Found dataset names and GitHub links"\n'
-                "}\n\n"
-                "Criteria:\n"
-                "- lists_training_datasets: true if mentions specific "
-                "dataset names\n"
-                "- links_to_huggingface_datasets: true if has "
-                "huggingface.co/datasets/ URLs\n"
-                "- links_to_code_repo: true if has GitHub/GitLab "
-                "repository links\n\n"
-                f"ANALYZE THIS TEXT:\n{text[:6000]}\n\n"
-                "RESPOND WITH JSON ONLY:"
-            )
-
-        def parse_llm_response(response: str) -> Dict[str, Any]:
-            obj = json.loads(response)
-            return {
-                "lists_training_datasets": bool(
-                    obj.get("lists_training_datasets", False)
-                ),
-                "links_to_huggingface_datasets": bool(
-                    obj.get("links_to_huggingface_datasets", False)
-                ),
-                "links_to_code_repo": bool(
-                    obj.get("links_to_code_repo", False)
-                ),
-                "notes": str(obj.get("notes", ""))[:400],
-            }
+            return readme
 
         try:
-            logging.info("[Availability] Starting dataset and code availability evaluation...")
-            
-            prompt = prepare_llm_prompt(Data)
-            logging.info(f"[Availability] Prepared prompt (length: {len(prompt)})")
-            
-            logging.info("[Availability] Calling LLM API...")
-            response = self.llm_manager.call_genai_api(prompt)
-            logging.info(f"[Availability] LLM response received")
-            logging.info(f"[Availability] Response content: {repr(response.content[:500])}")
-            
-            logging.info("[Availability] Parsing LLM response...")
-            parsed = parse_llm_response(response.content)
-            logging.info(f"[Availability] Parsed result: {parsed}")
+            logging.info("[Availability] Starting regex-based dataset/code availability evaluation...")
 
+            readme = _get_readme_content(Data)
+            card_str = str(getattr(Data, "card", ""))
+            text = (readme + "\n\n" + card_str).strip()
+
+            # Check for dataset mentions (common dataset names or patterns)
+            dataset_patterns = [
+                r'(?:dataset|training[_ ]?data|trained[_ ]?on|fine[- ]?tuned[_ ]?on)[:\s]+([a-zA-Z0-9/_-]+)',
+                r'\b(?:ImageNet|COCO|MNIST|CIFAR|SQuAD|GLUE|SuperGLUE|WikiText|Penn Treebank)\b',
+                r'huggingface\.co/datasets/([a-zA-Z0-9/_-]+)',
+            ]
+            lists_training_datasets = any(re.search(p, text, re.IGNORECASE) for p in dataset_patterns)
+
+            # Check for HuggingFace dataset URLs
+            hf_dataset_pattern = r'huggingface\.co/datasets/([a-zA-Z0-9/_-]+)'
+            links_to_huggingface_datasets = bool(re.search(hf_dataset_pattern, text, re.IGNORECASE))
+
+            # Check for code repository links (GitHub, GitLab, etc.)
+            code_patterns = [
+                r'github\.com/([a-zA-Z0-9/_-]+)',
+                r'gitlab\.com/([a-zA-Z0-9/_-]+)',
+                r'(?:code|repository|repo)[:\s]+https?://[^\s]+',
+            ]
+            links_to_code_repo = any(re.search(p, text, re.IGNORECASE) for p in code_patterns)
+
+            # Calculate score
             score = 0.0
-            if parsed["lists_training_datasets"]:
+            if lists_training_datasets:
                 score += 0.3
-                logging.debug("[Availability] +0.3 for training datasets")
-            if parsed["links_to_huggingface_datasets"]:
+                logging.info("[Availability] +0.3 for training datasets mention")
+            if links_to_huggingface_datasets:
                 score += 0.3
-                logging.debug("[Availability] +0.3 for HuggingFace dataset links")
-            if parsed["links_to_code_repo"]:
+                logging.info("[Availability] +0.3 for HuggingFace dataset links")
+            if links_to_code_repo:
                 score += 0.4
-                logging.debug("[Availability] +0.4 for code repository links")
+                logging.info("[Availability] +0.4 for code repository links")
+
             if score > 1.0:
                 score = 1.0
-            
-            logging.info(f"[Availability] Final score: {score}")
 
-            details = {"mode": "llm", **parsed}
+            logging.info(f"[Availability] Final score: {score} (regex-based, no LLM)")
+
+            details = {
+                "mode": "regex",
+                "lists_training_datasets": lists_training_datasets,
+                "links_to_huggingface_datasets": links_to_huggingface_datasets,
+                "links_to_code_repo": links_to_code_repo,
+                "notes": "Regex-based analysis (no LLM required)"
+            }
 
             return MetricResult(
                 metric_type=MetricType.DATASET_AND_CODE_SCORE,
@@ -482,94 +465,138 @@ class ModelMetricService:
                         return True
             return False
 
-        def _analyze_code_with_llm(repo_contents: list) -> Dict[str, Any]:
-            logging.info("[Code Quality] Starting LLM analysis of repository structure...")
-            
-            repo_summary = []
-            for item in repo_contents[:50]:
+        def _check_structure_heuristics(repo_contents: list) -> bool:
+            """Check for good structure using heuristics (no LLM)"""
+            if not isinstance(repo_contents, list) or len(repo_contents) == 0:
+                return False
+
+            # Look for common good structure indicators
+            structure_indicators = [
+                'src/', 'lib/', 'pkg/', 'internal/',  # Source directories
+                'cmd/', 'bin/', 'scripts/',  # Binary/script directories
+                'docs/', 'doc/', 'documentation/',  # Documentation
+                'examples/', 'samples/',  # Examples
+                'config/', 'configs/',  # Configuration
+            ]
+
+            found_indicators = 0
+            for item in repo_contents:
                 if isinstance(item, dict):
-                    name = item.get('name', '')
-                    item_type = item.get('type', '')
-                    repo_summary.append(f"{item_type}: {name}")
+                    path = item.get('path', '').lower()
+                    for indicator in structure_indicators:
+                        if indicator in path:
+                            found_indicators += 1
+                            break
 
-            repo_text = "\n".join(repo_summary)
-            logging.debug(f"[Code Quality] Repository summary items: {len(repo_summary)}")
+            # If we have 2+ structure indicators, assume good structure
+            return found_indicators >= 2
 
-            prompt = (
-                "CRITICAL: You MUST respond with ONLY valid JSON. "
-                "No explanations, no markdown, no code blocks.\n\n"
-                "Task: Analyze this repository structure for code quality. "
-                "Return EXACTLY this JSON structure:\n\n"
-                "{\n"
-                '  "has_comprehensive_tests": true|false,\n'
-                '  "shows_good_structure": true|false,\n'
-                '  "has_documentation": true|false,\n'
-                '  "notes": "analysis summary"\n'
-                "}\n\n"
-                "Rules:\n"
-                "1. ONLY return JSON - nothing else\n"
-                "2. Use true/false (lowercase) for booleans\n"
-                "3. Keep notes under 30 characters\n\n"
-                "Evaluation criteria:\n"
-                "- has_comprehensive_tests: Are there test files covering "
-                "multiple components?\n"
-                "- shows_good_structure: Well-organized directories and "
-                "separation of concerns?\n"
-                "- has_documentation: README, docs, or documentation "
-                "files present?\n\n"
-                "Repository structure:\n"
-                f"{repo_text}\n\n"
-                "Remember: ONLY return the JSON object."
-            )
-            
-            logging.info(f"[Code Quality] Prepared prompt (length: {len(prompt)})")
+        def _check_documentation(repo_contents: list) -> bool:
+            """Check for documentation files (no LLM)"""
+            if not isinstance(repo_contents, list):
+                return False
 
+            doc_indicators = ['readme', 'license', 'contributing', 'changelog', 'docs/', 'doc/']
+
+            for item in repo_contents:
+                if isinstance(item, dict):
+                    name = item.get('name', '').lower()
+                    path = item.get('path', '').lower()
+                    for indicator in doc_indicators:
+                        if indicator in name or indicator in path:
+                            return True
+            return False
+
+        def _analyze_code_with_llm(repo_contents: list) -> Dict[str, Any]:
+            """Analyze code structure - fallback to heuristics if LLM fails"""
+            logging.info("[Code Quality] Starting code structure analysis...")
+
+            # Try LLM first, but use heuristics as fallback
             try:
-                logging.info("[Code Quality] Calling LLM API...")
+                repo_summary = []
+                for item in repo_contents[:50]:
+                    if isinstance(item, dict):
+                        name = item.get('name', '')
+                        item_type = item.get('type', '')
+                        repo_summary.append(f"{item_type}: {name}")
+
+                repo_text = "\n".join(repo_summary)
+
+                if len(repo_summary) == 0:
+                    raise ValueError("Empty repository contents")
+
+                prompt = (
+                    "CRITICAL: You MUST respond with ONLY valid JSON. "
+                    "No explanations, no markdown, no code blocks.\n\n"
+                    "Task: Analyze this repository structure for code quality. "
+                    "Return EXACTLY this JSON structure:\n\n"
+                    "{\n"
+                    '  "has_comprehensive_tests": true|false,\n'
+                    '  "shows_good_structure": true|false,\n'
+                    '  "has_documentation": true|false,\n'
+                    '  "notes": "analysis summary"\n'
+                    "}\n\n"
+                    "Rules:\n"
+                    "1. ONLY return JSON - nothing else\n"
+                    "2. Use true/false (lowercase) for booleans\n"
+                    "3. Keep notes under 30 characters\n\n"
+                    "Evaluation criteria:\n"
+                    "- has_comprehensive_tests: Are there test files covering "
+                    "multiple components?\n"
+                    "- shows_good_structure: Well-organized directories and "
+                    "separation of concerns?\n"
+                    "- has_documentation: README, docs, or documentation "
+                    "files present?\n\n"
+                    "Repository structure:\n"
+                    f"{repo_text}\n\n"
+                    "Remember: ONLY return the JSON object."
+                )
+
+                logging.info(f"[Code Quality] Calling LLM API...")
                 response = self.llm_manager.call_genai_api(prompt)
                 logging.info(f"[Code Quality] LLM response received")
-                logging.info(f"[Code Quality] Response content: {repr(response.content[:500])}")
-                
-                logging.info("[Code Quality] Parsing JSON response...")
+
                 obj = json.loads(response.content)
-                logging.info(f"[Code Quality] Parsed JSON: {obj}")
-                
+
                 result = {
-                    "has_comprehensive_tests": bool(
-                        obj.get("has_comprehensive_tests", False)
-                    ),
-                    "shows_good_structure": bool(
-                        obj.get("shows_good_structure", False)
-                    ),
-                    "has_documentation": bool(
-                        obj.get("has_documentation", False)
-                    ),
+                    "has_comprehensive_tests": bool(obj.get("has_comprehensive_tests", False)),
+                    "shows_good_structure": bool(obj.get("shows_good_structure", False)),
+                    "has_documentation": bool(obj.get("has_documentation", False)),
                     "notes": str(obj.get("notes", ""))[:400],
                 }
-                logging.info(f"[Code Quality] LLM analysis result: {result}")
+                logging.info(f"[Code Quality] LLM analysis successful: {result}")
                 return result
-                
+
             except Exception as e:
-                logging.error(f"[Code Quality] LLM analysis failed: {e}")
-                logging.error(f"[Code Quality] Error type: {type(e).__name__}")
-                import traceback
-                logging.error(f"[Code Quality] Traceback:\n{traceback.format_exc()}")
-                
-                return {
-                    "has_comprehensive_tests": False,
-                    "shows_good_structure": False,
-                    "has_documentation": False,
-                    "notes": "LLM analysis failed"
+                logging.warning(f"[Code Quality] LLM analysis failed, using heuristics: {e}")
+
+                # Fallback to heuristics
+                has_structure = _check_structure_heuristics(repo_contents)
+                has_docs = _check_documentation(repo_contents)
+
+                result = {
+                    "has_comprehensive_tests": False,  # Can't determine without LLM
+                    "shows_good_structure": has_structure,
+                    "has_documentation": has_docs,
+                    "notes": "Heuristic analysis (LLM unavailable)"
                 }
+                logging.info(f"[Code Quality] Heuristic analysis result: {result}")
+                return result
 
         try:
             repo_contents = getattr(Data, "repo_contents", [])
 
-            if not isinstance(repo_contents, list):
+            # If no repo contents (common for HF models without code repos),
+            # return neutral score instead of 0.0
+            if not isinstance(repo_contents, list) or len(repo_contents) == 0:
+                logging.info("[Code Quality] No repository contents available, returning neutral score")
                 return MetricResult(
                     metric_type=MetricType.CODE_QUALITY,
-                    value=0.0,
-                    details={"error": "No repository contents available"},
+                    value=0.5,
+                    details={
+                        "mode": "no_repo",
+                        "notes": "No repository contents available (neutral score)"
+                    },
                     latency_ms=0,
                 )
 
@@ -700,57 +727,93 @@ class ModelMetricService:
             dataset_cards = getattr(Data, "dataset_cards", {})
             dataset_infos = getattr(Data, "dataset_infos", {})
 
+            # If no dataset info, return neutral score (0.5) instead of 0.0
+            # Many models don't have associated datasets in the system
             if not dataset_cards and not dataset_infos:
+                logging.info("[Dataset Quality] No dataset info available, returning neutral score")
                 return MetricResult(
                     metric_type=MetricType.DATASET_QUALITY,
-                    value=0.0,
-                    details={"error": "No dataset information available"},
+                    value=0.5,
+                    details={
+                        "mode": "no_data",
+                        "notes": "No dataset information available (neutral score)"
+                    },
                     latency_ms=0,
                 )
 
             prompt = _prepare_dataset_llm_prompt(Data)
 
             if not prompt:
+                logging.info("[Dataset Quality] Empty dataset content, returning neutral score")
                 return MetricResult(
                     metric_type=MetricType.DATASET_QUALITY,
-                    value=0.0,
-                    details={"error": "No dataset content to analyze"},
+                    value=0.5,
+                    details={
+                        "mode": "no_content",
+                        "notes": "No dataset content to analyze (neutral score)"
+                    },
                     latency_ms=0,
                 )
 
-            response = self.llm_manager.call_genai_api(prompt)
-            logging.info(f"LLM response content: {repr(response.content)}")
-            parsed = _parse_dataset_llm_response(response.content)
+            try:
+                logging.info("[Dataset Quality] Calling LLM for dataset analysis...")
+                response = self.llm_manager.call_genai_api(prompt)
+                logging.info(f"[Dataset Quality] LLM response received")
+                parsed = _parse_dataset_llm_response(response.content)
 
-            score = 0.0
-            if parsed["has_comprehensive_card"]:
-                score += 0.4
-            if parsed["has_clear_data_source"]:
-                score += 0.2
-            if parsed["has_preprocessing_info"]:
-                score += 0.2
-            if parsed["has_large_size"]:
-                score += 0.2
+                score = 0.0
+                if parsed["has_comprehensive_card"]:
+                    score += 0.4
+                if parsed["has_clear_data_source"]:
+                    score += 0.2
+                if parsed["has_preprocessing_info"]:
+                    score += 0.2
+                if parsed["has_large_size"]:
+                    score += 0.2
 
-            if score > 1.0:
-                score = 1.0
+                if score > 1.0:
+                    score = 1.0
 
-            details = {
-                "mode": "llm",
-                "dataset_count": len(dataset_cards),
-                **parsed
-            }
+                details = {
+                    "mode": "llm",
+                    "dataset_count": len(dataset_cards),
+                    **parsed
+                }
 
-            return MetricResult(
-                metric_type=MetricType.DATASET_QUALITY,
-                value=score,
-                details=details,
-                latency_ms=0,
-            )
+                logging.info(f"[Dataset Quality] LLM analysis score: {score}")
+                return MetricResult(
+                    metric_type=MetricType.DATASET_QUALITY,
+                    value=score,
+                    details=details,
+                    latency_ms=0,
+                )
+
+            except Exception as llm_error:
+                # LLM failed - return neutral score
+                logging.warning(f"[Dataset Quality] LLM analysis failed, returning neutral score: {llm_error}")
+                return MetricResult(
+                    metric_type=MetricType.DATASET_QUALITY,
+                    value=0.5,
+                    details={
+                        "mode": "llm_failed",
+                        "dataset_count": len(dataset_cards),
+                        "notes": "LLM analysis failed (neutral score)"
+                    },
+                    latency_ms=0,
+                )
 
         except Exception as e:
-            logging.error(f"Failed to evaluate dataset quality: {e}")
-            raise RuntimeError("Dataset quality evaluation failed") from e
+            logging.error(f"[Dataset Quality] Unexpected error: {e}")
+            # Return neutral score instead of raising
+            return MetricResult(
+                metric_type=MetricType.DATASET_QUALITY,
+                value=0.5,
+                details={
+                    "mode": "error",
+                    "notes": f"Error: {str(e)[:100]}"
+                },
+                latency_ms=0,
+            )
 
     def EvaluateRampUpTime(self, Data: Model) -> MetricResult:
         def _compose_source_text(data: Model) -> str:
