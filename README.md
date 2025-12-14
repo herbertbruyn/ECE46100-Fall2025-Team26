@@ -2,10 +2,10 @@
 Team project repository for ECE30861 Software Engineering
 
 ## Team Members
-- Mohamed Zaitoun
-- Sean Chen
-- Tegan Johnson
-- Kareem Hassan
+- Josh LeBlanc
+- Herbert de Bruyn
+- James Neff
+- Dylan Brannick
 
 ## Project Overview
 This project is a Python application that fetches and analyzes model information from Hugging Face, including associated datasets and GitHub repositories. It provides a comprehensive view of machine learning models, their metadata, and related resources.
