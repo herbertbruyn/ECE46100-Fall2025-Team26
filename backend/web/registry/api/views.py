@@ -517,7 +517,10 @@ def model_rate(request, id: int):
 @api_view(["POST"])
 # @require_auth
 def artifact_by_regex(request):
-    """POST /artifact/byRegEx"""
+    """POST /artifact/byRegEx - with blocking until artifacts are ready"""
+    import time as time_module
+    import sys
+
     ser = ArtifactRegexSerializer(data=request.data)
     if not ser.is_valid():
         return Response({"detail": "invalid regex"}, status=400)
@@ -528,11 +531,41 @@ def artifact_by_regex(request):
     except re.error:
         return Response({"detail": "invalid regex"}, status=400)
 
-    # Get only ready/completed artifacts that match the regex
+    # Blocking behavior: wait up to 170 seconds for artifacts to become ready
     valid_statuses = ["ready", "completed"]
-    matching_artifacts = [a for a in Artifact.objects.filter(status__in=valid_statuses) if rx.search(a.name)]
+    max_wait_seconds = 170
+    poll_interval = 2
+    elapsed = 0
+    prev_count = 0
 
+    # Poll and wait for artifacts to complete
+    while elapsed < max_wait_seconds:
+        # Get all ready/completed artifacts that match the regex
+        all_ready = Artifact.objects.filter(status__in=valid_statuses)
+        matching_artifacts = [a for a in all_ready if rx.search(a.name)]
+        current_count = len(matching_artifacts)
+
+        # Check if we have any pending/in-progress artifacts
+        pending_count = Artifact.objects.filter(
+            status__in=["pending_rating", "rating_in_progress", "ingesting"]
+        ).count()
+
+        # If count is increasing or there are still pending artifacts, keep waiting
+        if pending_count > 0 or current_count > prev_count:
+            prev_count = current_count
+            time_module.sleep(poll_interval)
+            elapsed += poll_interval
+        else:
+            # No more pending artifacts and count stable - done
+            break
+
+    # Final query after waiting
+    all_ready = Artifact.objects.filter(status__in=valid_statuses)
+    matching_artifacts = [a for a in all_ready if rx.search(a.name)]
     results = [a.metadata_view() for a in matching_artifacts]
+
+    sys.stderr.write(f"DEBUG: Regex '{pattern}' returned {len(results)} artifacts after {elapsed}s wait\n")
+    sys.stderr.flush()
 
     # Log search activity
     user = getattr(request, 'user', None)
@@ -554,14 +587,6 @@ def artifacts_list(request):
     """POST /artifacts"""
     import time
     import sys
-
-    # CRITICAL DEBUG: Force output to stderr which always shows
-    sys.stderr.write("=" * 80 + "\n")
-    sys.stderr.write(f"Request method: {request.method}\n")
-    sys.stderr.write(f"Request data type: {type(request.data)}\n")
-    sys.stderr.write(f"Request data: {request.data}\n")
-    sys.stderr.write("=" * 80 + "\n")
-    sys.stderr.flush()
 
     # Generate request ID for tracking
     request_id = int(time.time() * 1000) % 10000000000000  # 13-digit timestamp-based ID
@@ -631,9 +656,6 @@ def artifacts_list(request):
                 else:
                     # No more pending artifacts and count stable - done
                     break
-
-            sys.stderr.write(f"DEBUG: Wildcard query returning {qs.count()} artifacts after {elapsed}s\n")
-            sys.stderr.flush()
 
         else:
             # Specific name: wait for that artifact to become ready
