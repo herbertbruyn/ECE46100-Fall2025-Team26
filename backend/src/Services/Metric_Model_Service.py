@@ -171,31 +171,45 @@ class ModelMetricService:
 
     def EvaluateBusFactor(self, Data: Model) -> MetricResult:
         def _contributors_score(contrib_count: int) -> float:
+            """
+            Score based on number of contributors.
+            For ML models, small teams are acceptable (unlike large software projects).
+            """
             if contrib_count >= 7:
-                return 1.0
+                return 1.0  # Large team
             if 4 <= contrib_count <= 6:
-                return 0.7
+                return 0.8  # Medium team
             if 2 <= contrib_count <= 3:
-                return 0.5
+                return 0.6  # Small team (common for ML models)
             if contrib_count == 1:
-                return 0.3
-            return 0.0
+                return 0.5  # Solo researcher (acceptable for ML)
+            return 0.0  # No contributors (problematic)
 
         def _recency_score(last_commit: Optional[datetime]) -> float:
+            """
+            Score based on last commit recency.
+            For ML models, old commits are acceptable (stable models don't need updates).
+            More lenient than code projects.
+            """
             if last_commit is None:
-                return 0.0
+                return 0.5  # Neutral if no commit data
+
             now = datetime.now(timezone.utc)
             months = _months_between(now, last_commit)
-            if months < 3.0:
-                return 1.0
-            score = 1.0 - 0.1 * (months - 3.0)
-            if months > 12.0:
-                return 0.0
-            if score < 0.0:
-                return 0.0
-            if score > 1.0:
-                return 1.0
-            return score
+
+            # Very lenient scoring for model artifacts
+            if months < 6.0:
+                return 1.0  # Recent update
+            elif months < 12.0:
+                return 0.9  # Updated in last year
+            elif months < 24.0:
+                return 0.8  # Updated in last 2 years
+            elif months < 36.0:
+                return 0.7  # Updated in last 3 years
+            else:
+                return 0.6  # Stable model (no penalty for old commits)
+
+            # Note: Even old models get 0.6 minimum - stable is good!
 
         def _latest_commit_ts(data: Model) -> Optional[datetime]:
             commits = getattr(data, "repo_commit_history", [])
@@ -610,14 +624,20 @@ class ModelMetricService:
 
             llm_analysis = _analyze_code_with_llm(repo_contents)
 
+            # Scoring breakdown:
+            # - Tests: 0.3 (essential for quality)
+            # - Structure: 0.25 (organization)
+            # - Documentation: 0.25 (README, docs)
+            # - Dependency mgmt: 0.2 (requirements.txt, etc.)
             score = 0.0
             if has_tests:
-                score += 0.4
-
+                score += 0.3
             if llm_analysis["shows_good_structure"]:
-                score += 0.3
+                score += 0.25
+            if llm_analysis["has_documentation"]:
+                score += 0.25
             if has_dependency_mgmt:
-                score += 0.3
+                score += 0.2
 
             if score > 1.0:
                 score = 1.0
@@ -625,7 +645,8 @@ class ModelMetricService:
             details = {
                 "has_tests": has_tests,
                 "has_dependency_management": has_dependency_mgmt,
-                "lint_check_proxy": llm_analysis["shows_good_structure"],
+                "has_good_structure": llm_analysis["shows_good_structure"],
+                "has_documentation": llm_analysis["has_documentation"],
                 "llm_analysis": llm_analysis
             }
 
@@ -940,7 +961,7 @@ class ModelMetricService:
             # logging.info(f"[Ramp-Up Time] Parsed result: {parsed}")
 
             # Calculate weighted average (50% each component)
-            score = (parsed["quality_of_example_code"] * 0.5 + 
+            score = (parsed["quality_of_example_code"] * 0.5 +
                     parsed["readme_coverage"] * 0.5)
             # logging.debug(f"[Ramp-Up Time] Calculated score before clamping: {score}")
             
