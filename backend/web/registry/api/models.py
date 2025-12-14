@@ -152,6 +152,66 @@ class AuthToken(models.Model):
         return count
 
 
+# ====================== Activity Logging ======================
+
+class ActivityLog(models.Model):
+    """Activity log for tracking user actions"""
+    ACTION_TYPES = [
+        ('upload', 'Upload'),
+        ('update', 'Update'),
+        ('delete', 'Delete'),
+        ('download', 'Download'),
+        ('login', 'Login'),
+        ('logout', 'Logout'),
+        ('search', 'Search'),
+        ('view', 'View'),
+        ('rate', 'Rate'),
+    ]
+
+    ARTIFACT_TYPES = [
+        ('model', 'Model'),
+        ('dataset', 'Dataset'),
+        ('code', 'Code'),
+    ]
+
+    id = models.BigAutoField(primary_key=True)
+    user = models.CharField(max_length=255, db_index=True)  # Username (not FK to allow anonymous)
+    action = models.CharField(max_length=20, choices=ACTION_TYPES, db_index=True)
+    artifact_type = models.CharField(max_length=20, choices=ARTIFACT_TYPES, null=True, blank=True)
+    artifact_id = models.BigIntegerField(null=True, blank=True, db_index=True)
+    artifact_name = models.CharField(max_length=255, null=True, blank=True)
+    details = models.TextField(null=True, blank=True)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    timestamp = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        db_table = 'activity_logs'
+        ordering = ['-timestamp']
+        indexes = [
+            models.Index(fields=['-timestamp']),
+            models.Index(fields=['user', '-timestamp']),
+            models.Index(fields=['action', '-timestamp']),
+            models.Index(fields=['artifact_type', '-timestamp']),
+        ]
+
+    def __str__(self):
+        return f"{self.user} - {self.action} - {self.timestamp}"
+
+    @classmethod
+    def log(cls, user, action, artifact_type=None, artifact_id=None, artifact_name=None, details=None, ip_address=None):
+        """Create an activity log entry"""
+        username = user.name if hasattr(user, 'name') else str(user) if user else 'anonymous'
+        return cls.objects.create(
+            user=username,
+            action=action,
+            artifact_type=artifact_type,
+            artifact_id=artifact_id,
+            artifact_name=artifact_name,
+            details=details,
+            ip_address=ip_address
+        )
+
+
 # ====================== Existing Models ======================
 
 class Dataset(models.Model):

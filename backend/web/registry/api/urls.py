@@ -1,6 +1,6 @@
 # api/urls.py
 from django.urls import path, re_path
-from . import views, auth_views
+from . import views, auth_views, activity_views
 
 urlpatterns = [
     # Admin reset endpoint
@@ -42,5 +42,8 @@ urlpatterns = [
     path("artifact/model/<int:id>/lineage", views.artifact_lineage),
 
     # License check endpoint
-    path("artifact/model/<int:id>/license-check", views.artifact_license_check)
+    path("artifact/model/<int:id>/license-check", views.artifact_license_check),
+
+    # Activity log endpoint
+    path("activity", activity_views.get_activity_logs),
 ]
