@@ -92,12 +92,8 @@ class AsyncIngestService:
 
         # Create artifact with pending_rating status
         with transaction.atomic():
-            # Convert repo_id to name format expected by autograder
-            # Replace forward slashes with hyphens: "google-research/bert" -> "google-research-bert"
-            artifact_name = repo_id.replace('/', '-')
-
             artifact = Artifact.objects.create(
-                name=artifact_name,
+                name=repo_id.split('/')[-1],
                 source_url=source_url,
                 type=artifact_type,
                 status="pending_rating",  # Waiting for background worker
@@ -283,8 +279,6 @@ class AsyncIngestService:
                     dataset_obj = find_or_create_dataset(artifact.name)
 
                     # Update all models that reference this dataset by name
-                    # Use __icontains to match dataset name regardless of format
-                    # (handles both "rajpurkar/squad" and "rajpurkar-squad" variations)
                     models_to_link = Artifact.objects.filter(
                         type="model",
                         dataset_name__icontains=artifact.name,
@@ -301,7 +295,6 @@ class AsyncIngestService:
                     code_obj = find_or_create_code(artifact.name)
 
                     # Update all models that reference this code by name
-                    # Use __icontains to match code name regardless of format
                     models_to_link = Artifact.objects.filter(
                         type="model",
                         code_name__icontains=artifact.name,
@@ -619,26 +612,20 @@ class AsyncIngestService:
             
             if not parent_model_id:
                 return 0.5
-
+            
             from api.models import Artifact
-
-            # Convert parent_model_id to the same format we use for artifact names
-            # If it has a slash, convert to hyphen format: "microsoft/resnet-50" -> "microsoft-resnet-50"
-            # This ensures exact matching with our stored artifact names
-            parent_name = parent_model_id.replace('/', '-')
-
-            # Use exact match to avoid confusion between models with similar names
-            # e.g., "resnet-50" vs "microsoft-resnet-50" vs "google-resnet-50"
+            parent_name = parent_model_id.split('/')[-1] if '/' in parent_model_id else parent_model_id
+            
             parent_artifact = Artifact.objects.filter(
                 type="model",
-                name=parent_name,  # Exact match
+                name__icontains=parent_name,
                 status="ready"
             ).exclude(id=artifact_id).first()
-
+            
             if parent_artifact and parent_artifact.net_score is not None:
                 logger.info(f"Found parent {parent_artifact.name} with net_score {parent_artifact.net_score}")
                 return parent_artifact.net_score
-
+            
             return 0.5
         except Exception as e:
             logger.error(f"Tree score failed: {e}")

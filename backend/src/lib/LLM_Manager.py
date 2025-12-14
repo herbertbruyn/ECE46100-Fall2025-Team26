@@ -76,7 +76,7 @@ class LLMManager:
         
         try:
             logging.info(f"[LLM] Sending POST request to {url}")
-            response = requests.post(url, headers=headers, json=body, timeout=60)
+            response = requests.post(url, headers=headers, json=body, timeout=30)
             
             logging.info(f"[LLM] Response status code: {response.status_code}")
             
