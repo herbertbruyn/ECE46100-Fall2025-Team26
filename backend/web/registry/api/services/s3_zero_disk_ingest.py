@@ -637,49 +637,103 @@ class S3ZeroDiskIngest:
             owner, dataset_name = parts
 
             # Get dataset metadata to check size
+            dataset_metadata = None
+            total_size = 0
+
+            # Try metadata first (includes full info)
             try:
                 dataset_metadata = api.dataset_metadata(owner, dataset_name)
-                # Calculate total size from files
-                total_size = 0
                 if hasattr(dataset_metadata, 'files') and dataset_metadata.files:
                     for file_info in dataset_metadata.files:
                         if hasattr(file_info, 'totalBytes'):
                             total_size += file_info.totalBytes
-
-                logger.info(f"Kaggle dataset {repo_id} total size: {total_size / (1024*1024):.2f} MB")
-
-                # If dataset is too large, download metadata only
-                if total_size > SIZE_THRESHOLD_BYTES:
-                    logger.info(f"Dataset exceeds {SIZE_THRESHOLD_BYTES / (1024*1024*1024):.1f}GB threshold - downloading metadata only")
-                    return self._create_kaggle_metadata_zip(api, owner, dataset_name, dataset_metadata, output_zip_key)
-
+                logger.info(f"Fetched metadata successfully")
             except Exception as e:
-                logger.warning(f"Could not fetch dataset metadata, proceeding with full download: {e}")
-                # If we can't get metadata, proceed with full download
+                logger.warning(f"Could not fetch dataset_metadata: {e}")
+
+                # Fallback: Try dataset_list_files to get size info
+                try:
+                    logger.info(f"Trying dataset_list_files as fallback...")
+                    file_list = api.dataset_list_files(owner, dataset_name)
+
+                    if hasattr(file_list, 'files'):
+                        for file_info in file_list.files:
+                            if hasattr(file_info, 'totalBytes'):
+                                total_size += file_info.totalBytes
+                            elif hasattr(file_info, 'size'):
+                                total_size += file_info.size
+                        logger.info(f"Got file list with {len(file_list.files)} files")
+
+                    # Create minimal metadata object for use later
+                    class MinimalMetadata:
+                        def __init__(self):
+                            self.files = file_list.files if hasattr(file_list, 'files') else []
+                            self.title = f"{owner}/{dataset_name}"
+                            self.subtitle = ""
+                            self.description = "Dataset metadata unavailable"
+                            self.licenseName = "Unknown"
+                            self.keywords = []
+                            self.collaborators = []
+
+                    dataset_metadata = MinimalMetadata()
+
+                except Exception as e2:
+                    logger.warning(f"dataset_list_files also failed: {e2}")
+                    # Create completely dummy metadata and proceed with full download attempt
+                    logger.warning(f"Cannot determine size - creating minimal dummy ZIP")
+                    return self._create_kaggle_dummy_zip(owner, dataset_name, output_zip_key)
+
+            logger.info(f"Kaggle dataset {repo_id} total size: {total_size / (1024*1024):.2f} MB")
+
+            # If dataset is too large, download metadata only
+            if total_size > SIZE_THRESHOLD_BYTES:
+                logger.info(f"Dataset exceeds {SIZE_THRESHOLD_BYTES / (1024*1024*1024):.1f}GB threshold - downloading metadata only")
+                return self._create_kaggle_metadata_zip(api, owner, dataset_name, dataset_metadata, output_zip_key)
 
             # Create a temporary directory for Kaggle download
             # Note: Kaggle API doesn't support streaming, so we need temp storage
             with tempfile.TemporaryDirectory() as temp_dir:
                 logger.info(f"Downloading Kaggle dataset {repo_id} to temp: {temp_dir}")
 
-                # Download dataset files to temp directory
-                api.dataset_download_files(
-                    dataset=repo_id,
-                    path=temp_dir,
-                    unzip=True  # Unzip Kaggle's zip so we can re-zip for S3
-                )
+                # Download dataset files to temp directory with size monitoring
+                download_aborted = False
+                try:
+                    api.dataset_download_files(
+                        dataset=repo_id,
+                        path=temp_dir,
+                        unzip=True  # Unzip Kaggle's zip so we can re-zip for S3
+                    )
+                except Exception as download_err:
+                    logger.warning(f"Download may have been interrupted: {download_err}")
+                    # Continue with whatever was downloaded
 
-                # List all downloaded files
+                # List all downloaded files and check total size
                 import os
                 files_to_zip = []
+                actual_download_size = 0
                 for root, dirs, files in os.walk(temp_dir):
                     for file in files:
                         file_path = os.path.join(root, file)
+                        file_size = os.path.getsize(file_path)
+                        actual_download_size += file_size
+
                         # Get relative path from temp_dir
                         rel_path = os.path.relpath(file_path, temp_dir)
                         files_to_zip.append((file_path, rel_path))
 
                 logger.info(f"Found {len(files_to_zip)} files to upload to S3")
+                logger.info(f"Actual downloaded size: {actual_download_size / (1024*1024):.2f} MB")
+
+                # If downloaded size exceeds threshold, abort and create metadata-only
+                if actual_download_size > SIZE_THRESHOLD_BYTES:
+                    logger.warning(f"Downloaded data exceeds {SIZE_THRESHOLD_BYTES / (1024*1024*1024):.1f}GB threshold!")
+                    logger.warning(f"Aborting full upload, creating metadata-only ZIP instead")
+
+                    # If we have metadata, use it; otherwise create minimal metadata
+                    if dataset_metadata:
+                        return self._create_kaggle_metadata_zip(api, owner, dataset_name, dataset_metadata, output_zip_key)
+                    else:
+                        return self._create_kaggle_dummy_zip(owner, dataset_name, output_zip_key)
 
                 # Initialize multipart upload to S3
                 upload_id = self.s3_client.create_multipart_upload(
@@ -908,3 +962,84 @@ For full dataset access, visit: https://www.kaggle.com/datasets/{owner}/{dataset
         except Exception as e:
             logger.error(f"Failed to create metadata ZIP for {owner}/{dataset_name}: {e}")
             raise RuntimeError(f"Metadata ZIP creation failed: {e}")
+
+    def _create_kaggle_dummy_zip(self, owner: str, dataset_name: str, output_zip_key: str) -> Tuple[str, int]:
+        """
+        Create a minimal dummy ZIP when dataset metadata cannot be fetched.
+
+        This prevents the system from attempting a full dataset download when we can't
+        determine size or access metadata.
+
+        Args:
+            owner: Dataset owner username
+            dataset_name: Dataset name
+            output_zip_key: S3 key for output ZIP file
+
+        Returns:
+            Tuple of (sha256_hash, size_bytes)
+        """
+        import json
+        import zipfile
+
+        logger.info(f"Creating dummy ZIP for {owner}/{dataset_name} (metadata unavailable)")
+
+        try:
+            # Create minimal README
+            readme_content = f"""# {owner}/{dataset_name}
+
+## Dataset Information Unavailable
+
+This Kaggle dataset could not be accessed for metadata retrieval.
+
+**Dataset URL:** https://www.kaggle.com/datasets/{owner}/{dataset_name}
+
+**Note:** This is a placeholder entry. The actual dataset could not be downloaded or analyzed
+due to access restrictions, API limitations, or other issues.
+
+To access this dataset:
+1. Visit the dataset page on Kaggle
+2. Check if the dataset is publicly available
+3. Verify your Kaggle API credentials have the necessary permissions
+"""
+
+            # Create minimal metadata JSON
+            metadata_content = {
+                "dataset_id": f"{owner}/{dataset_name}",
+                "title": f"{owner}/{dataset_name}",
+                "description": "Metadata unavailable - could not access dataset information",
+                "license_name": "Unknown",
+                "status": "metadata_unavailable",
+                "kaggle_url": f"https://www.kaggle.com/datasets/{owner}/{dataset_name}",
+                "note": "This is a placeholder. Dataset metadata could not be retrieved."
+            }
+
+            # Create in-memory ZIP
+            zip_buffer = io.BytesIO()
+            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr('README.md', readme_content)
+                zf.writestr('kaggle_metadata.json', json.dumps(metadata_content, indent=2))
+                zf.writestr('PLACEHOLDER.txt', 'This is a placeholder dataset entry.')
+
+            # Get ZIP bytes
+            zip_bytes = zip_buffer.getvalue()
+            total_size = len(zip_bytes)
+            sha256_hash = hashlib.sha256(zip_bytes)
+
+            # Upload to S3
+            logger.info(f"Uploading dummy ZIP to S3: {output_zip_key} ({total_size} bytes)")
+
+            self.s3_client.put_object(
+                Bucket=self.bucket,
+                Key=output_zip_key,
+                Body=zip_bytes,
+                ContentType='application/zip'
+            )
+
+            hash_hex = sha256_hash.hexdigest()
+            logger.info(f"Dummy ZIP created: {output_zip_key} ({total_size} bytes), SHA256: {hash_hex[:16]}...")
+
+            return hash_hex, total_size
+
+        except Exception as e:
+            logger.error(f"Failed to create dummy ZIP for {owner}/{dataset_name}: {e}")
+            raise RuntimeError(f"Dummy ZIP creation failed: {e}")
