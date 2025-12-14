@@ -13,7 +13,7 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from django.db import transaction
 
-from .models import User, AuthToken, UserGroup
+from .models import User, AuthToken, UserGroup, ActivityLog
 from .auth import require_admin, authenticate_user
 
 logger = logging.getLogger(__name__)
@@ -108,9 +108,13 @@ def authenticate(request):
         
         # Update last login
         user.update_last_login()
-        
+
+        # Log the login activity
+        ip_address = request.META.get('HTTP_X_FORWARDED_FOR', '').split(',')[0] or request.META.get('REMOTE_ADDR')
+        ActivityLog.log(user, 'login', ip_address=ip_address)
+
         logger.info(f"User '{username}' authenticated successfully")
-        
+
         # Return token as string (wrapped in quotes as per spec)
         return Response(token, status=200)
         

@@ -68,7 +68,9 @@ class ApiService {
   }
 
   async getArtifacts(): Promise<Artifact[]> {
-    const { data } = await this.api.get<Artifact[]>('/artifacts');
+    // Backend expects POST /artifacts with query array
+    // Use wildcard to get all artifacts
+    const { data } = await this.api.post<Artifact[]>('/artifacts', [{ name: '*' }]);
     return data;
   }
 
@@ -103,17 +105,17 @@ class ApiService {
   }
 
   async searchArtifacts(query: SearchQuery): Promise<Artifact[]> {
-    const { data } = await this.api.post<Artifact[]>('/artifacts/search', query);
+    const { data } = await this.api.post<Artifact[]>('/artifacts', [query]);
     return data;
   }
 
   async searchByRegex(query: RegexSearchQuery): Promise<Artifact[]> {
-    const { data } = await this.api.post<Artifact[]>('/artifacts/by_regex', query);
+    const { data } = await this.api.post<Artifact[]>('/artifact/byRegEx', query);
     return data;
   }
 
   async resetArtifacts(): Promise<{ message: string }> {
-    const { data } = await this.api.post('/reset');
+    const { data } = await this.api.delete('/reset');
     return data;
   }
 
@@ -159,14 +161,21 @@ class ApiService {
         if (value) params.append(key, value.toString());
       });
     }
-    
-    try {
-      const { data } = await this.api.get(`/activity?${params.toString()}`);
-      return data.results || data;
-    } catch (error) {
-      console.warn('Activity log endpoint not available:', error);
-      return [];
-    }
+
+    const { data } = await this.api.get(`/activity?${params.toString()}`);
+    return data.results || data;
+  }
+
+  async getArtifactLineage(id: number): Promise<{ nodes: any[]; edges: any[] }> {
+    const { data } = await this.api.get(`/artifact/model/${id}/lineage`);
+    return data;
+  }
+
+  async checkLicenseCompatibility(modelId: number, githubUrl: string): Promise<boolean> {
+    const { data } = await this.api.post(`/artifact/model/${modelId}/license-check`, {
+      github_url: githubUrl
+    });
+    return data;
   }
 }
 

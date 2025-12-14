@@ -46,19 +46,10 @@ export function ActivityLogPage() {
     setLoading(true);
     try {
       const data = await api.getActivityLog();
-      
-      // If no data from API, use mock data for demo
-      if (data.length === 0) {
-        const mockData = generateMockActivities();
-        setActivities(mockData);
-      } else {
-        setActivities(data);
-      }
+      setActivities(data);
     } catch (error) {
       console.error('Failed to load activities:', error);
-      // Use mock data on error
-      const mockData = generateMockActivities();
-      setActivities(mockData);
+      setActivities([]);
     } finally {
       setLoading(false);
     }
@@ -474,48 +465,4 @@ export function ActivityLogPage() {
       )}
     </div>
   );
-}
-
-// Mock data generator for demo purposes
-function generateMockActivities(): ActivityLog[] {
-  const users = ['alice', 'bob', 'charlie', 'admin', 'ece30861defaultadminuser'];
-  const actions: ActivityLog['action'][] = ['upload', 'delete', 'download', 'view', 'search', 'rate', 'login', 'logout'];
-  const types: ('model' | 'dataset' | 'code')[] = ['model', 'dataset', 'code'];
-  const artifacts = [
-    'bert-base-uncased',
-    'gpt2-medium',
-    'resnet50',
-    'imagenet-1k',
-    'coco-dataset',
-    'pytorch-utils',
-    'training-scripts',
-  ];
-
-  const activities: ActivityLog[] = [];
-  const now = new Date();
-
-  for (let i = 0; i < 50; i++) {
-    const action = actions[Math.floor(Math.random() * actions.length)];
-    const hasArtifact = !['login', 'logout', 'search'].includes(action);
-    
-    activities.push({
-      id: i + 1,
-      user: users[Math.floor(Math.random() * users.length)],
-      action,
-      artifact_type: hasArtifact ? types[Math.floor(Math.random() * types.length)] : undefined,
-      artifact_id: hasArtifact ? Math.floor(Math.random() * 100) + 1 : undefined,
-      artifact_name: hasArtifact ? artifacts[Math.floor(Math.random() * artifacts.length)] : undefined,
-      details: action === 'search' 
-        ? `Searched for: model*` 
-        : action === 'rate'
-        ? `Calculated metrics: net_score=0.75`
-        : hasArtifact
-        ? `${action} artifact successfully`
-        : `User ${action}`,
-      ip_address: `192.168.1.${Math.floor(Math.random() * 255)}`,
-      timestamp: new Date(now.getTime() - Math.random() * 7 * 24 * 60 * 60 * 1000).toISOString(),
-    });
-  }
-
-  return activities.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 }

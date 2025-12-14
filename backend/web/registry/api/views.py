@@ -28,7 +28,7 @@ except Exception:
     GitHubAPIManager = None
 
 # Import models
-from .models import Artifact, Dataset, Code, ModelRating
+from .models import Artifact, Dataset, Code, ModelRating, ActivityLog
 
 from .serializers import ArtifactCreateSerializer, ArtifactRegexSerializer
 
@@ -55,6 +55,16 @@ gh = GitHubAPIManager(token=os.getenv("GITHUB_TOKEN")) if GitHubAPIManager else 
 ingest_service = IngestService() if IngestService else None
 
 ############################### Helper Functions ######################################
+
+def get_client_ip(request):
+    """Extract client IP from request"""
+    x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+    if x_forwarded_for:
+        ip = x_forwarded_for.split(',')[0]
+    else:
+        ip = request.META.get('REMOTE_ADDR')
+    return ip
+
 def derive_name(artifact_type: str, url: str) -> str:
     """Derive artifact name from URL"""
     try:
@@ -247,7 +257,21 @@ def artifact_create(request, artifact_type: str):
         revision=request.data.get("revision", "main"),
         uploaded_by=user
     )
-    
+
+    # Log upload activity if successful
+    if status_code in [200, 201, 202]:
+        artifact_name = response_data.get('metadata', {}).get('name') or derive_name(artifact_type, url)
+        artifact_id = response_data.get('metadata', {}).get('id')
+        ActivityLog.log(
+            user=user or 'anonymous',
+            action='upload',
+            artifact_type=artifact_type,
+            artifact_id=artifact_id,
+            artifact_name=artifact_name,
+            details=f"Uploaded from {url}",
+            ip_address=get_client_ip(request)
+        )
+
     return Response(response_data, status=status_code)
 
 
@@ -290,6 +314,17 @@ def artifact_details(request, artifact_type: str, id: int):
             }
         }
 
+        # Log view/download activity
+        user = getattr(request, 'user', None)
+        ActivityLog.log(
+            user=user or 'anonymous',
+            action='download',
+            artifact_type=artifact_type,
+            artifact_id=id,
+            artifact_name=obj.name,
+            ip_address=get_client_ip(request)
+        )
+
         return Response(response_data, status=200)
     
     # Update artifact (re-ingest)
@@ -317,12 +352,25 @@ def artifact_details(request, artifact_type: str, id: int):
         # Delete old artifact and re-ingest
         obj.delete()
         
+        user = getattr(request, 'user', None)
         status_code, response_data = ingest_service.ingest_artifact(
             source_url=new_url,
             artifact_type=artifact_type,
-            uploaded_by=request.user
+            uploaded_by=user
         )
-        
+
+        # Log update activity
+        if status_code in [200, 201, 202]:
+            ActivityLog.log(
+                user=user or 'anonymous',
+                action='update',
+                artifact_type=artifact_type,
+                artifact_id=id,
+                artifact_name=obj.name,
+                details=f"Updated to {new_url}",
+                ip_address=get_client_ip(request)
+            )
+
         if status_code == 201:
             return Response({"detail": "Artifact is updated."}, status=200)
         else:
@@ -330,14 +378,25 @@ def artifact_details(request, artifact_type: str, id: int):
 
     # Delete artifact
     elif request.method == "DELETE":
-    
+
+        # Log delete activity before deleting
+        user = getattr(request, 'user', None)
+        ActivityLog.log(
+            user=user or 'anonymous',
+            action='delete',
+            artifact_type=artifact_type,
+            artifact_id=id,
+            artifact_name=obj.name,
+            ip_address=get_client_ip(request)
+        )
+
         # Delete file from storage
         if obj.blob:
             obj.blob.delete(save=False)
-        
+
         # Delete from database (cascade will delete rating)
         obj.delete()
-        
+
         return Response({"detail": "Artifact is deleted."}, status=200)
 
 
@@ -400,6 +459,18 @@ def model_rate(request, id: int):
         }
         rating_response['size_score_latency'] = 0.0
 
+        # Log rate activity
+        user = getattr(request, 'user', None)
+        ActivityLog.log(
+            user=user or 'anonymous',
+            action='rate',
+            artifact_type='model',
+            artifact_id=id,
+            artifact_name=obj.name,
+            details=f"Net score: {obj.net_score:.2f}",
+            ip_address=get_client_ip(request)
+        )
+
         return Response(rating_response, status=200)
 
     # Fallback: check if rating exists (old format)
@@ -432,6 +503,15 @@ def artifact_by_regex(request):
     matching_artifacts = [a for a in Artifact.objects.filter(status__in=valid_statuses) if rx.search(a.name)]
 
     results = [a.metadata_view() for a in matching_artifacts]
+
+    # Log search activity
+    user = getattr(request, 'user', None)
+    ActivityLog.log(
+        user=user or 'anonymous',
+        action='search',
+        details=f"Regex search: {pattern} ({len(results)} results)",
+        ip_address=get_client_ip(request)
+    )
 
     if not results:
         return Response({"detail": "No artifact found under this regex."}, status=404)
