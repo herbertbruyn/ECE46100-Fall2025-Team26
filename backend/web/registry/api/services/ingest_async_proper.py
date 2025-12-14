@@ -92,8 +92,12 @@ class AsyncIngestService:
 
         # Create artifact with pending_rating status
         with transaction.atomic():
+            # Convert slashes to hyphens in name for database storage
+            # e.g., "google-research/bert" -> "google-research-bert"
+            artifact_name = repo_id.replace('/', '-')
+
             artifact = Artifact.objects.create(
-                name=repo_id.split('/')[-1],
+                name=artifact_name,
                 source_url=source_url,
                 type=artifact_type,
                 status="pending_rating",  # Waiting for background worker

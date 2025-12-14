@@ -66,12 +66,16 @@ def get_client_ip(request):
     return ip
 
 def derive_name(artifact_type: str, url: str) -> str:
-    """Derive artifact name from URL"""
+    """Derive artifact name from URL (for database storage)"""
     try:
         if artifact_type == "model" and hf:
-            return hf.model_link_to_id(url)
+            # Get the model ID and convert slashes to hyphens for storage
+            model_id = hf.model_link_to_id(url)
+            return model_id.replace('/', '-')
         if artifact_type == "dataset" and hf:
-            return hf.dataset_link_to_id(url)
+            # Get the dataset ID and convert slashes to hyphens for storage
+            dataset_id = hf.dataset_link_to_id(url)
+            return dataset_id.replace('/', '-')
         if artifact_type == "code" and gh:
             owner, repo = gh.code_link_to_repo(url)
             return repo

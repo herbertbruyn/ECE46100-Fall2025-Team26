@@ -26,20 +26,34 @@ class HuggingFaceAPIManager:
 
     @staticmethod
     def model_link_to_id(model_link: str) -> str:
-        """Converts a Hugging Face model link to a model ID."""
-        match = re.search(r"huggingface\.co/([^/]+/[^/]+)", model_link)
+        """Converts a Hugging Face model link to a model ID (for API calls)."""
+        # Try organization/model format first
+        match = re.search(r"huggingface\.co/([^/]+/[^/?]+)", model_link)
+        if match:
+            return match.group(1)  # Keep slash for API calls
+
+        # Try single model name format (no organization)
+        match = re.search(r"huggingface\.co/([^/?]+)(?:\?|$)", model_link)
         if match:
             return match.group(1)
+
         raise ValueError(f"Invalid model link: {model_link}")
 
     @staticmethod
     def dataset_link_to_id(dataset_link: str) -> str:
-        """Converts a Hugging Face dataset link to a dataset ID."""
+        """Converts a Hugging Face dataset link to a dataset ID (for API calls)."""
+        # Try organization/dataset format first
         match = re.search(
-            r"huggingface\.co/datasets/([^/]+/[^/]+)", dataset_link
+            r"huggingface\.co/datasets/([^/]+/[^/?]+)", dataset_link
         )
         if match:
+            return match.group(1)  # Keep slash for API calls
+
+        # Try single dataset name format (no organization)
+        match = re.search(r"huggingface\.co/datasets/([^/?]+)(?:\?|$)", dataset_link)
+        if match:
             return match.group(1)
+
         raise ValueError(f"Invalid dataset link: {dataset_link}")
 
     def get_model_info(self, model_id: str) -> ModelInfo:
