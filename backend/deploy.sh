@@ -20,4 +20,4 @@ docker image prune -f
 docker pull $REPO
 
 # Run new container
-docker run --memory="512m" --cpus="1.0" -d --name backend -p 8000:8000 --env-file ~/.env $REPO
+docker run --memory="4g" --cpus="1.0" -d --name backend -p 8000:8000 --env-file ~/.env $REPO
