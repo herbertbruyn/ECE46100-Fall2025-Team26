@@ -600,20 +600,40 @@ def artifacts_list(request):
         
         # Get ready/completed artifacts, with polling for autograder compatibility
         valid_statuses = ["ready", "completed"]
-        max_wait_seconds = 300  # 5 minutes max wait
+        max_wait_seconds = 170  # 2 minutes 50 sec max wait
         poll_interval = 2  # Check every 2 seconds
 
         if name == "*":
-            # Query all: wait until at least some artifacts are ready
-            qs = Artifact.objects.filter(status__in=valid_statuses)
+            # Query all: wait as long as possible for all artifacts to complete
+            import time as time_module
 
-            # If no ready artifacts, poll for up to max_wait_seconds
+            # Count total artifacts that exist (any status)
+            total_artifacts = Artifact.objects.count()
+
+            # Poll and wait for artifacts to complete
             elapsed = 0
-            while qs.count() == 0 and elapsed < max_wait_seconds:
-                import time as time_module
-                time_module.sleep(poll_interval)
-                elapsed += poll_interval
+            prev_count = 0
+
+            while elapsed < max_wait_seconds:
                 qs = Artifact.objects.filter(status__in=valid_statuses)
+                current_count = qs.count()
+
+                # Check if we have any pending/in-progress artifacts
+                pending_count = Artifact.objects.filter(
+                    status__in=["pending_rating", "rating_in_progress", "ingesting"]
+                ).count()
+
+                # If count is increasing or there are still pending artifacts, keep waiting
+                if pending_count > 0 or current_count > prev_count:
+                    prev_count = current_count
+                    time_module.sleep(poll_interval)
+                    elapsed += poll_interval
+                else:
+                    # No more pending artifacts and count stable - done
+                    break
+
+            sys.stderr.write(f"DEBUG: Wildcard query returning {qs.count()} artifacts after {elapsed}s\n")
+            sys.stderr.flush()
 
         else:
             # Specific name: wait for that artifact to become ready
