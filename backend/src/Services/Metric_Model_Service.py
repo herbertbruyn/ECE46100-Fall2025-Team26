@@ -11,9 +11,12 @@ from Helpers import _parse_iso8601, _months_between
 
 class ModelMetricService:
     def __init__(self) -> None:
+        logging.info("[Metric Service] Initializing ModelMetricService...")
         try:
             self.llm_manager = LLMManager()
+            logging.info("[Metric Service] LLM Manager initialized successfully")
         except Exception as e:
+            logging.error(f"[Metric Service] Failed to initialize LLM Manager: {e}")
             raise
 
     def EvaluateModel(
@@ -115,23 +118,35 @@ class ModelMetricService:
         }
 
         try:
+            logging.info("[Performance Claims] Starting evaluation...")
+            logging.debug(f"[Performance Claims] Model data attributes: {dir(Data)}")
             
             prompt = prepare_llm_prompt(Data)
+            logging.info(f"[Performance Claims] Prepared prompt (length: {len(prompt)})")
             
+            logging.info("[Performance Claims] Calling LLM API...")
             response = self.llm_manager.call_genai_api(prompt)
+            logging.info(f"[Performance Claims] LLM response received")
+            logging.info(f"[Performance Claims] Response content: {repr(response.content[:500])}")
             
             response_text = ""
             if hasattr(response, 'content'):
                 response_text = response.content
+                logging.debug("[Performance Claims] Extracted content from response.content")
             elif isinstance(response, str):
                 response_text = response
+                logging.debug("[Performance Claims] Response is a string")
             else:
                 response_text = str(response)
+                logging.warning("[Performance Claims] Converted response to string")
             
+            logging.info("[Performance Claims] Parsing LLM response...")
             parsed = parse_llm_response(response_text)
+            logging.info(f"[Performance Claims] Parsed result: {parsed}")
 
             # Use the score directly from the LLM response
             score = parsed.get("score", 0.0)
+            logging.info(f"[Performance Claims] Final score: {score}")
 
             details = {"mode": "llm", **parsed}
 
@@ -383,23 +398,34 @@ class ModelMetricService:
             }
 
         try:
+            logging.info("[Availability] Starting dataset and code availability evaluation...")
             
             prompt = prepare_llm_prompt(Data)
+            logging.info(f"[Availability] Prepared prompt (length: {len(prompt)})")
             
+            logging.info("[Availability] Calling LLM API...")
             response = self.llm_manager.call_genai_api(prompt)
+            logging.info(f"[Availability] LLM response received")
+            logging.info(f"[Availability] Response content: {repr(response.content[:500])}")
             
+            logging.info("[Availability] Parsing LLM response...")
             parsed = parse_llm_response(response.content)
+            logging.info(f"[Availability] Parsed result: {parsed}")
 
             score = 0.0
             if parsed["lists_training_datasets"]:
                 score += 0.3
+                logging.debug("[Availability] +0.3 for training datasets")
             if parsed["links_to_huggingface_datasets"]:
                 score += 0.3
+                logging.debug("[Availability] +0.3 for HuggingFace dataset links")
             if parsed["links_to_code_repo"]:
                 score += 0.4
+                logging.debug("[Availability] +0.4 for code repository links")
             if score > 1.0:
                 score = 1.0
             
+            logging.info(f"[Availability] Final score: {score}")
 
             details = {"mode": "llm", **parsed}
 
@@ -459,6 +485,7 @@ class ModelMetricService:
             return False
 
         def _analyze_code_with_llm(repo_contents: list) -> Dict[str, Any]:
+            logging.info("[Code Quality] Starting LLM analysis of repository structure...")
             
             repo_summary = []
             for item in repo_contents[:50]:
@@ -468,6 +495,7 @@ class ModelMetricService:
                     repo_summary.append(f"{item_type}: {name}")
 
             repo_text = "\n".join(repo_summary)
+            logging.debug(f"[Code Quality] Repository summary items: {len(repo_summary)}")
 
             prompt = (
                 "CRITICAL: You MUST respond with ONLY valid JSON. "
@@ -496,11 +524,17 @@ class ModelMetricService:
                 "Remember: ONLY return the JSON object."
             )
             
+            logging.info(f"[Code Quality] Prepared prompt (length: {len(prompt)})")
 
             try:
+                logging.info("[Code Quality] Calling LLM API...")
                 response = self.llm_manager.call_genai_api(prompt)
+                logging.info(f"[Code Quality] LLM response received")
+                logging.info(f"[Code Quality] Response content: {repr(response.content[:500])}")
                 
+                logging.info("[Code Quality] Parsing JSON response...")
                 obj = json.loads(response.content)
+                logging.info(f"[Code Quality] Parsed JSON: {obj}")
                 
                 result = {
                     "has_comprehensive_tests": bool(
@@ -514,6 +548,7 @@ class ModelMetricService:
                     ),
                     "notes": str(obj.get("notes", ""))[:400],
                 }
+                logging.info(f"[Code Quality] LLM analysis result: {result}")
                 return result
                 
             except Exception as e:
@@ -811,11 +846,14 @@ class ModelMetricService:
             }
 
         try:
+            logging.info("[Ramp-Up Time] Starting evaluation...")
             
             prompt = prepare_llm_prompt(Data)
+            logging.info(f"[Ramp-Up Time] Prepared prompt (length: {len(prompt) if prompt else 0})")
             
             # Handle case with no documentation
             if not prompt:
+                logging.warning("[Ramp-Up Time] No documentation found, returning 0.0")
                 return MetricResult(
                     metric_type=MetricType.RAMP_UP_TIME,
                     value=0.0,
@@ -823,16 +861,23 @@ class ModelMetricService:
                     latency_ms=0,
                 )
             
+            logging.info("[Ramp-Up Time] Calling LLM API...")
             response = self.llm_manager.call_genai_api(prompt)
+            logging.info(f"[Ramp-Up Time] LLM response received")
+            logging.info(f"[Ramp-Up Time] Response content: {repr(response.content[:500])}")
             
+            logging.info("[Ramp-Up Time] Parsing LLM response...")
             parsed = parse_llm_response(response.content)
+            logging.info(f"[Ramp-Up Time] Parsed result: {parsed}")
 
             # Calculate weighted average (50% each component)
             score = (parsed["quality_of_example_code"] * 0.5 + 
                     parsed["readme_coverage"] * 0.5)
+            logging.debug(f"[Ramp-Up Time] Calculated score before clamping: {score}")
             
             # Ensure final score is in [0.0, 1.0]
             score = max(0.0, min(1.0, score))
+            logging.info(f"[Ramp-Up Time] Final score: {score}")
 
             details = {"mode": "llm", **parsed}
 
