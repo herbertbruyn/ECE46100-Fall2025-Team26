@@ -10,29 +10,10 @@ from Services.Metric_Model_Service import ModelMetricService
 from lib.Metric_Result import MetricResult
 
 # Load environment variables from .env file
-dotenv_path = os.path.join(os.path.dirname(__file__), '..', '.env')
-load_dotenv(dotenv_path)
+load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 
-# Configure logging to INFO level so we can see what's happening
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
-
-# Check if GITHUB_TOKEN is loaded
-github_token = os.getenv("GITHUB_TOKEN")
-if github_token:
-    logging.info(f"GITHUB_TOKEN is loaded (length: {len(github_token)} characters)")
-else:
-    logging.error("GITHUB_TOKEN is NOT set!")
-    logging.error(f"Attempted to load .env from: {dotenv_path}")
-    logging.error(f".env file exists: {os.path.exists(dotenv_path)}")
-    if os.path.exists(dotenv_path):
-        logging.error("The .env file exists but GITHUB_TOKEN was not found in it")
-    else:
-        logging.error("The .env file does not exist at the expected location")
-
+# Configure logging to hide all debug info
+logging.basicConfig(level=logging.CRITICAL)
 
 
 def time_evaluation(eval_func: Callable, *args, **kwargs) -> \

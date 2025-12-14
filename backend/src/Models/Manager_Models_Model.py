@@ -69,38 +69,27 @@ class ModelManager(Model):
 
         owner, repo = None, None
         if code_link is not None:
-            logging.info(f"Processing code_link: {code_link}")
             try:
                 owner, repo = self.github_manager.code_link_to_repo(code_link)
-                logging.info(f"Extracted owner='{owner}', repo='{repo}'")
             except ValueError as e:
                 logging.warning(f"Invalid code link provided: {e}")
-        else:
-            logging.info("No code_link provided")
 
-        logging.info(f"Calling _fetch_github_data with owner='{owner}', repo='{repo}'")
         self._fetch_github_data(model_data, owner, repo)
 
         return model_data
 
     def _fetch_github_data(self, model_data, owner: str, repo: str) -> None:
-        logging.info(f"_fetch_github_data called: owner='{owner}', repo='{repo}'")
-        
         if not (owner and repo):
-            logging.warning("No owner/repo provided, skipping GitHub data fetch")
             model_data.repo_metadata = {}
             model_data.repo_contents = []
             model_data.repo_contributors = []
             model_data.repo_commit_history = []
             return
 
-        logging.info(f"Fetching GitHub data for {owner}/{repo}")
-
         try:
             model_data.repo_metadata = (
                 self.github_manager.get_repo_info(owner, repo)
             )
-            logging.info(f"Successfully fetched repo metadata")
         except Exception as e:
             logging.warning(f"Failed to fetch repo metadata: {e}")
             model_data.repo_metadata = {}
@@ -109,7 +98,6 @@ class ModelManager(Model):
             model_data.repo_contents = (
                 self.github_manager.get_repo_contents(owner, repo)
             )
-            logging.info(f"Successfully fetched repo contents")
         except Exception as e:
             logging.warning(f"Failed to fetch repo contents: {e}")
             model_data.repo_contents = []
@@ -123,7 +111,6 @@ class ModelManager(Model):
                 if isinstance(repo_contributors_result, list)
                 else []
             )
-            logging.info(f"Successfully fetched {len(model_data.repo_contributors)} contributors")
         except Exception as e:
             logging.warning(f"Failed to fetch repo contributors: {e}")
             model_data.repo_contributors = []
@@ -138,7 +125,6 @@ class ModelManager(Model):
                 if isinstance(repo_commits_result, list)
                 else []
             )
-            logging.info(f"Successfully fetched {len(model_data.repo_commit_history)} commits")
         except Exception as e:
             logging.warning(f"Failed to fetch repo commits: {e}")
             model_data.repo_commit_history = []
