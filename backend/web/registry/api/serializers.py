@@ -3,6 +3,7 @@ from .models import ActivityLog
 
 class ArtifactCreateSerializer(serializers.Serializer):
     url = serializers.URLField()     # body must be {"url":"https://..."}
+    name = serializers.CharField(required=True)  # body must include {"name": "artifact-name"}
 
 class ArtifactRegexSerializer(serializers.Serializer):
     regex = serializers.CharField()  # body must be {"regex":"..."}

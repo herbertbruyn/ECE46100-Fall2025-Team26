@@ -243,13 +243,14 @@ def artifact_create(request, artifact_type: str):
         )
 
     url = ser.validated_data["url"]
-    
+    name = ser.validated_data["name"]
+
     if not ingest_service:
         return Response(
             {"detail": "Ingest service not available"},
             status=500
         )
-    
+
     user = getattr(request, 'user', None)  # Get user if exists, otherwise None
     if user and not user.is_authenticated:
         user = None
@@ -258,6 +259,7 @@ def artifact_create(request, artifact_type: str):
     status_code, response_data = ingest_service.ingest_artifact(
         source_url=url,
         artifact_type=artifact_type,
+        artifact_name=name,
         revision=request.data.get("revision", "main"),
         uploaded_by=user
     )
@@ -551,12 +553,22 @@ def artifact_by_regex(request):
 def artifacts_list(request):
     """POST /artifacts"""
     import time
-    
+    import sys
+
+    # CRITICAL DEBUG: Force output to stderr which always shows
+    sys.stderr.write("=" * 80 + "\n")
+    sys.stderr.write("POST /artifacts ENDPOINT HIT!\n")
+    sys.stderr.write(f"Request method: {request.method}\n")
+    sys.stderr.write(f"Request data type: {type(request.data)}\n")
+    sys.stderr.write(f"Request data: {request.data}\n")
+    sys.stderr.write("=" * 80 + "\n")
+    sys.stderr.flush()
+
     # Generate request ID for tracking
     request_id = int(time.time() * 1000) % 10000000000000  # 13-digit timestamp-based ID
     client_ip = request.META.get('REMOTE_ADDR', 'unknown')
     start_time = time.time()
-    
+
     # Log incoming request
     logging.info(f"[{request_id}] POST /artifacts from {client_ip}")
     

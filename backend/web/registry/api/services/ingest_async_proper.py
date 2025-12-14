@@ -44,11 +44,19 @@ class AsyncIngestService:
         self,
         source_url: str,
         artifact_type: str,
+        artifact_name: str = None,
         revision: str = "main",
         uploaded_by=None
     ) -> Tuple[int, Dict]:
         """
         Accept artifact for async ingestion - returns 202 immediately
+
+        Args:
+            source_url: URL to the artifact
+            artifact_type: Type of artifact (model, dataset, code)
+            artifact_name: Name provided in request body (preferred over URL parsing)
+            revision: Git revision to use
+            uploaded_by: User who uploaded the artifact
 
         Returns:
             - 202: Accepted, queued for background processing
@@ -57,7 +65,7 @@ class AsyncIngestService:
             - 409: Duplicate artifact
         """
         logger.info(f"=" * 80)
-        logger.info(f"INGEST REQUEST: type={artifact_type}, url={source_url}")
+        logger.info(f"INGEST REQUEST: type={artifact_type}, url={source_url}, name={artifact_name}")
         logger.info(f"=" * 80)
 
         # Validate artifact_type
@@ -67,7 +75,7 @@ class AsyncIngestService:
                 "error": f"Invalid artifact_type. Must be one of: {', '.join(valid_types)}"
             }
 
-        # Parse repo_id from source_url
+        # Parse repo_id from source_url (needed for HuggingFace API calls)
         repo_id = self._parse_repo_id(source_url)
         if not repo_id:
             logger.error(f"PARSE FAILED: Could not extract repo_id from URL: {source_url}")
@@ -77,6 +85,14 @@ class AsyncIngestService:
 
         logger.info(f"PARSED: repo_id='{repo_id}' from url='{source_url}'")
 
+        # Use provided name from request body, or fall back to parsing from URL
+        if artifact_name is None:
+            # Fallback: derive name from repo_id (convert slashes to hyphens)
+            artifact_name = repo_id.replace('/', '-')
+            logger.info(f"No name provided, derived from URL: '{artifact_name}'")
+        else:
+            logger.info(f"Using provided name from request body: '{artifact_name}'")
+
         # Check for duplicates (only READY artifacts count as duplicates)
         existing = Artifact.objects.filter(
             source_url=source_url,
@@ -84,7 +100,7 @@ class AsyncIngestService:
         ).first()
 
         if existing:
-            logger.warning(f"DUPLICATE: {artifact_type} '{repo_id}' already exists as artifact #{existing.id} (status={existing.status})")
+            logger.warning(f"DUPLICATE: {artifact_type} '{artifact_name}' already exists as artifact #{existing.id} (status={existing.status})")
             return 409, {
                 "error": "Artifact exists already",
                 "existing_id": existing.id
@@ -92,10 +108,6 @@ class AsyncIngestService:
 
         # Create artifact with pending_rating status
         with transaction.atomic():
-            # Convert slashes to hyphens in name for database storage
-            # e.g., "google-research/bert" -> "google-research-bert"
-            artifact_name = repo_id.replace('/', '-')
-
             artifact = Artifact.objects.create(
                 name=artifact_name,
                 source_url=source_url,
