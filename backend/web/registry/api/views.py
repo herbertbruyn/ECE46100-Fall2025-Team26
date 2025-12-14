@@ -557,7 +557,6 @@ def artifacts_list(request):
 
     # CRITICAL DEBUG: Force output to stderr which always shows
     sys.stderr.write("=" * 80 + "\n")
-    sys.stderr.write("POST /artifacts ENDPOINT HIT!\n")
     sys.stderr.write(f"Request method: {request.method}\n")
     sys.stderr.write(f"Request data type: {type(request.data)}\n")
     sys.stderr.write(f"Request data: {request.data}\n")
@@ -586,10 +585,17 @@ def artifacts_list(request):
     
     for idx, query in enumerate(queries, 1):
         name = query.get("name", "*")
-        artifact_type = query.get("type")
-        
-        # Build types list for logging
-        types_list = [artifact_type] if artifact_type else []
+
+        # Handle "types" field (list from spec)
+        types_list = query.get("types", [])
+
+        # Extract single type for filtering (we only support filtering by one type)
+        # Empty list means "all types" (no filtering)
+        if types_list and len(types_list) > 0:
+            artifact_type = types_list[0]  # Use first type from list
+        else:
+            artifact_type = None  # No type filtering
+
         logging.info(f"Query {idx}: name='{name}', types={types_list}")
         
         # Get only ready/completed artifacts (don't wait for in-progress ones)
@@ -600,16 +606,21 @@ def artifacts_list(request):
         else:
             # Log the search type
             logging.info(f"Searching for exact match: '{name}'")
-            
+
             # Use exact match instead of substring match
             qs = Artifact.objects.filter(name__iexact=name, status__in=valid_statuses)
-            
+
             # Log the result count
             count = qs.count()
             if count > 0:
-                logging.info(f"✓ Exact match: {count} package(s)")
+                logging.info(f"Exact match: {count} package(s)")
             else:
-                logging.info(f"✗ No exact match found for '{name}'")
+                logging.info(f"No exact match found for '{name}'")
+
+                # DEBUG: Show what names ARE in the database
+                all_names = list(Artifact.objects.filter(status__in=valid_statuses).values_list('name', flat=True)[:20])
+                sys.stderr.write(f"DEBUG: Available artifact names in DB: {all_names}\n")
+                sys.stderr.flush()
         
         if artifact_type:
             qs = qs.filter(type=artifact_type)
