@@ -32,6 +32,9 @@ from .models import Artifact, Dataset, Code, ModelRating
 
 from .serializers import ArtifactCreateSerializer, ArtifactRegexSerializer
 
+# Initialize logger
+logger = logging.getLogger(__name__)
+
 # Import the ingest service based on configuration
 try:
     from django.conf import settings
@@ -422,19 +425,35 @@ def artifact_by_regex(request):
         return Response({"detail": "invalid regex"}, status=400)
 
     pattern = ser.validated_data["regex"]
+
+    # Log the regex pattern being searched
+    logger.info(f"[SEARCH] Regex search requested: pattern='{pattern}'")
+
     try:
         rx = re.compile(pattern, re.IGNORECASE)
     except re.error:
+        logger.warning(f"[SEARCH] Invalid regex pattern: '{pattern}'")
         return Response({"detail": "invalid regex"}, status=400)
 
     # Get only ready/completed artifacts that match the regex
     valid_statuses = ["ready", "completed"]
-    matching_artifacts = [a for a in Artifact.objects.filter(status__in=valid_statuses) if rx.search(a.name)]
+    all_artifacts = Artifact.objects.filter(status__in=valid_statuses)
+    logger.info(f"[SEARCH] Searching through {all_artifacts.count()} ready/completed artifacts")
+
+    matching_artifacts = [a for a in all_artifacts if rx.search(a.name)]
+
+    logger.info(f"[SEARCH] Regex '{pattern}' matched {len(matching_artifacts)} artifacts")
+    if matching_artifacts:
+        matched_names = [a.name for a in matching_artifacts[:10]]  # Log first 10 matches
+        logger.info(f"[SEARCH] Matched artifacts: {matched_names}")
 
     results = [a.metadata_view() for a in matching_artifacts]
 
     if not results:
+        logger.info(f"[SEARCH] No artifacts matched regex: '{pattern}'")
         return Response({"detail": "No artifact found under this regex."}, status=404)
+
+    logger.info(f"[SEARCH] Returning {len(results)} results for regex: '{pattern}'")
     return Response(results, status=200)
 
 
@@ -449,6 +468,13 @@ def artifacts_list(request):
             status=400
         )
 
+    # Log the queries being searched
+    logger.info(f"[SEARCH] artifacts_list requested with {len(queries)} queries")
+    for i, query in enumerate(queries):
+        name = query.get("name", "*")
+        artifact_type = query.get("type", "any")
+        logger.info(f"[SEARCH] Query {i+1}: name='{name}', type='{artifact_type}'")
+
     results = []
 
     for query in queries:
@@ -460,28 +486,40 @@ def artifacts_list(request):
 
         if name == "*":
             qs = Artifact.objects.filter(status__in=valid_statuses)
+            logger.info(f"[SEARCH] Wildcard search - found {qs.count()} artifacts")
         else:
             qs = Artifact.objects.filter(name__icontains=name, status__in=valid_statuses)
+            logger.info(f"[SEARCH] Name search '{name}' - found {qs.count()} artifacts")
+            if qs.exists():
+                matched_names = [a.name for a in qs[:5]]  # Log first 5 matches
+                logger.info(f"[SEARCH] Matched: {matched_names}")
 
         if artifact_type:
+            before_count = qs.count()
             qs = qs.filter(type=artifact_type)
+            logger.info(f"[SEARCH] Type filter '{artifact_type}' - reduced from {before_count} to {qs.count()}")
 
         results.extend([a.metadata_view() for a in qs])
-    
+
+    logger.info(f"[SEARCH] Total results before pagination: {len(results)}")
+
     # Pagination
     offset = request.query_params.get("offset", 0)
     try:
         offset = int(offset)
     except ValueError:
         offset = 0
-    
+
     page_size = 100
     paginated = results[offset:offset + page_size]
-    
+
+    logger.info(f"[SEARCH] Returning {len(paginated)} results (offset={offset}, page_size={page_size})")
+
     response = Response(paginated, status=200)
     if len(results) > offset + page_size:
         response["offset"] = str(offset + page_size)
-    
+        logger.info(f"[SEARCH] More results available - next offset: {offset + page_size}")
+
     return response
 
 
