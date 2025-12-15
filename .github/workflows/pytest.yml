@@ -1,32 +1,48 @@
-name: pytest on pr
+name: Run Backend Tests
 
 on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'backend/**'  # Only run when backend files change
+      - 'pytest.ini'
   pull_request:
+    branches: [ "main" ]
+    paths:
+      - 'backend/**'
+      - 'pytest.ini'
 
 jobs:
   test:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ./backend
 
     steps:
-      - uses: actions/checkout@v4
+    - uses: actions/checkout@v4
 
-      - name: set up python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.13'
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+        cache: 'pip' # Caches dependencies for faster runs
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install pytest
-          pip install -r requirements.txt
+    - name: Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        if [ -f backend/requirements.txt ]; then pip install -r backend/requirements.txt; fi
+        pip install pytest pytest-cov coverage
 
-      - name: Run tests with pytest
-        env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
-          GEN_AI_STUDIO_API_KEY: ${{ secrets.GEN_AI_STUDIO_API_KEY }}
-        run: |
-          pytest src/Testing
+    - name: Run Pytest
+      env:
+        # Crucial: Add backend/src to PYTHONPATH so imports like 'from Services...' work
+        PYTHONPATH: ${{ github.workspace }}/backend/src
+        # Mock API keys to prevent tests from failing due to missing credentials
+        GITHUB_TOKEN: "mock_token"
+        HUGGINGFACE_TOKEN: "mock_token"
+        OPENAI_API_KEY: "mock_token"
+        POSTGRES_DB: "test_db"
+        POSTGRES_USER: "user"
+        POSTGRES_PASSWORD: "password"
+        POSTGRES_HOST: "localhost"
+      run: |
+        # Run pytest using the configuration file in the root
+        python -m pytest -c pytest.ini
