@@ -13,23 +13,22 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
+  // TESTING MODE: Always return a mock authenticated admin user
+  const mockUser: User = {
+    name: 'test-user',
+    is_admin: true,
+  };
 
-  useEffect(() => {
-    const currentUser = api.getCurrentUser();
-    if (currentUser) {
-      setUser(currentUser);
-    }
-  }, []);
+  const [user] = useState<User | null>(mockUser);
 
   const login = async (username: string, password: string, isAdmin: boolean) => {
-    const response = await api.login(username, password, isAdmin);
-    setUser(response.user);
+    // Mock login - no actual API call
+    console.log('Mock login - authentication disabled for testing');
   };
 
   const logout = () => {
-    api.logout();
-    setUser(null);
+    // Mock logout - no actual logout
+    console.log('Mock logout - authentication disabled for testing');
   };
 
   return (
@@ -38,8 +37,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         user,
         login,
         logout,
-        isAuthenticated: !!user,
-        isAdmin: user?.is_admin || false,
+        isAuthenticated: true, // Always authenticated
+        isAdmin: true, // Always admin
       }}
     >
       {children}
