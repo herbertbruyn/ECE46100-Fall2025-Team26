@@ -1,95 +1,59 @@
 """
-Simple coverage tests for Controllers to boost overall coverage.
+Coverage tests for Controller.py
 """
 import sys
 import os
+import pytest
 from unittest.mock import Mock, patch
 
-# Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from Controllers.Controller import Controller
 from Models.Model import Model
 
-
 class TestControllerCoverage:
-    """Simple tests to boost controller coverage."""
     
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.controller = Controller()
-    
-    def test_controller_initialization(self):
-        """Test controller can be initialized."""
+    # PATCH THE CLASS WHERE IT IS IMPORTED IN CONTROLLER.PY
+    # This ensures the Controller uses the Mock, not the real class
+    @patch('Controllers.Controller.ModelManager')
+    def test_fetch_basic_functionality(self, mock_manager_cls):
+        """Test the basic fetch delegation to ModelManager."""
+        mock_instance = mock_manager_cls.return_value
+        expected_model = Mock(spec=Model)
+        mock_instance.where.return_value = expected_model
+        
         controller = Controller()
-        assert controller is not None
-    
-    @patch('Controllers.Controller.HuggingFaceAPIManager')
-    @patch('Controllers.Controller.GitHubAPIManager')
-    def test_fetch_basic_functionality(self, mock_github, mock_hf):
-        """Test basic fetch functionality."""
-        # Mock HuggingFace API
-        mock_hf_instance = Mock()
-        mock_hf.return_value = mock_hf_instance
-        mock_hf_instance.get_model_info.return_value = {
-            'id': 'test/model',
-            'card': 'Test model card',
-            'license': 'MIT',
-            'size': 1000000
-        }
         
-        # Mock GitHub API
-        mock_github_instance = Mock()
-        mock_github.return_value = mock_github_instance
-        mock_github_instance.get_repo_info.return_value = {
-            'contributors': ['user1', 'user2'],
-            'commits': 100,
-            'branches': 5
-        }
+        result = controller.fetch(
+            "https://huggingface.co/test/model",
+            dataset_links=["https://data.com"],
+            code_link="https://github.com"
+        )
         
-        # Test with minimal input
-        model_link = "https://huggingface.co/test/model"
-        dataset_links = ["https://huggingface.co/datasets/test_dataset"]
+        assert result == expected_model
+        mock_instance.where.assert_called_once()
+
+    @patch('Controllers.Controller.ModelManager')
+    def test_fetch_no_datasets(self, mock_manager_cls):
+        """Test fetch handles None for optional args."""
+        mock_instance = mock_manager_cls.return_value
         
-        result = self.controller.fetch(model_link, dataset_links)
+        controller = Controller()
+        controller.fetch("https://huggingface.co/test/model")
         
-        assert isinstance(result, Model)
-        assert result.id == 'test/model'
-    
-    @patch('Controllers.Controller.HuggingFaceAPIManager')
-    def test_fetch_no_datasets(self, mock_hf):
-        """Test fetch with no dataset links."""
-        # Mock HuggingFace API
-        mock_hf_instance = Mock()
-        mock_hf.return_value = mock_hf_instance
-        mock_hf_instance.get_model_info.return_value = {
-            'id': 'test/model',
-            'card': 'Test model card',
-            'license': 'Apache-2.0',
-            'size': 500000
-        }
+        args = mock_instance.where.call_args
+        assert args is not None
+        assert args[0][0] == "https://huggingface.co/test/model"
+        assert args[0][1] is None
+        assert args[0][2] is None
+
+    @patch('Controllers.Controller.ModelManager')
+    def test_fetch_api_error_handling(self, mock_manager_cls):
+        """Test controller propagates exceptions from manager."""
+        mock_instance = mock_manager_cls.return_value
+        mock_instance.where.side_effect = RuntimeError("API Down")
         
-        model_link = "https://huggingface.co/test/model"
+        controller = Controller()
         
-        result = self.controller.fetch(model_link, [])
-        
-        assert isinstance(result, Model)
-        assert result.dataset_links == []
-    
-    @patch('Controllers.Controller.HuggingFaceAPIManager')
-    def test_fetch_api_error_handling(self, mock_hf):
-        """Test fetch handles API errors gracefully."""
-        # Mock HuggingFace API to raise an exception
-        mock_hf_instance = Mock()
-        mock_hf.return_value = mock_hf_instance
-        mock_hf_instance.get_model_info.side_effect = Exception("API Error")
-        
-        model_link = "https://huggingface.co/test/model"
-        
-        # Should not crash, might return None or handle gracefully
-        try:
-            self.controller.fetch(model_link, [])
-            # If it doesn't raise, that's fine too
-        except Exception:
-            # Expected behavior for some error conditions
-            pass
+        with pytest.raises(RuntimeError):
+            controller.fetch("https://huggingface.co/test/model")

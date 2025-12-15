@@ -39,11 +39,11 @@ class TestSimpleCoverage:
         metric_types = [
             MetricType.PERFORMANCE_CLAIMS,
             MetricType.BUS_FACTOR,
-            MetricType.SIZE,
+            MetricType.SIZE_SCORE,
             MetricType.RAMP_UP_TIME,
             MetricType.DATASET_AND_CODE_SCORE,
             MetricType.CODE_QUALITY,
-            MetricType.DATASETS_QUALITY,
+            MetricType.DATASET_QUALITY,
             MetricType.LICENSE
         ]
         
@@ -69,19 +69,17 @@ class TestSimpleCoverage:
             latency_ms=250
         )
         
-        result_dict = result.to_dict()
-        
-        assert isinstance(result_dict, dict)
-        assert result_dict["metric_type"] == MetricType.PERFORMANCE_CLAIMS
-        assert result_dict["value"] == 0.75
-        assert result_dict["details"]["accuracy"] == 0.95
-        assert result_dict["latency_ms"] == 250
+        # The MetricResult is a dataclass without to_dict; validate fields
+        assert result.metric_type == MetricType.PERFORMANCE_CLAIMS
+        assert result.value == 0.75
+        assert result.details["accuracy"] == 0.95
+        assert result.latency_ms == 250
     
     def test_metric_result_edge_cases(self):
         """Test MetricResult with edge cases."""
         # Test with minimum values
         result_min = MetricResult(
-            metric_type=MetricType.SIZE,
+            metric_type=MetricType.SIZE_SCORE,
             value=0.0,
             details={},
             latency_ms=0
