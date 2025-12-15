@@ -252,8 +252,6 @@ def artifact_create(request, artifact_type: str):
         )
 
     user = getattr(request, 'user', None)  # Get user if exists, otherwise None
-    if user and not user.is_authenticated:
-        user = None
 
     # Use ingest service
     status_code, response_data = ingest_service.ingest_artifact(
