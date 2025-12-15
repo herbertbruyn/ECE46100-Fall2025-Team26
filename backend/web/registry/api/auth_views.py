@@ -106,6 +106,11 @@ def authenticate(request):
         # Generate token
         token = AuthToken.generate_token(user, expires_in_hours=24)
         
+        # DEBUG: Log the token being created
+        logger.info(f"=== TOKEN CREATED ===")
+        logger.info(f"User: {username} (is_admin={user.is_admin})")
+        logger.info(f"Token: {token[:40]}... (length={len(token)})")
+        
         # Update last login
         user.update_last_login()
 

@@ -8,10 +8,13 @@ Provides:
 - Permission checking
 - Token validation
 """
+import logging
 from functools import wraps
 from rest_framework.response import Response
 from rest_framework.decorators import api_view
 from .models import User, AuthToken
+
+logger = logging.getLogger(__name__)
 
 
 def authenticate_user(request):
@@ -26,11 +29,21 @@ def authenticate_user(request):
     # Check both X-Authorization and Authorization headers
     auth_token = request.headers.get('X-Authorization') or request.headers.get('Authorization')
 
+    # DEBUG: Log what we received
+    logger.info(f"=== AUTH DEBUG ===")
+    logger.info(f"X-Authorization header: {request.headers.get('X-Authorization')}")
+    logger.info(f"Authorization header: {request.headers.get('Authorization')}")
+    logger.info(f"auth_token (before stripping): '{auth_token}'")
+
     # Strip "bearer " or "Token " prefix if present
     if auth_token and ' ' in auth_token:
         auth_token = auth_token.split(' ', 1)[1]
+        logger.info(f"auth_token (after stripping): '{auth_token}'")
+    else:
+        logger.info(f"No prefix to strip (or no token)")
 
     if not auth_token:
+        logger.warning("No auth token provided")
         return None, Response(
             {"detail": "Authentication failed due to invalid or missing AuthenticationToken"},
             status=403
@@ -38,10 +51,12 @@ def authenticate_user(request):
     
     try:
         # Find token in database
+        logger.info(f"Looking up token in database: '{auth_token[:20]}...' (length={len(auth_token)})")
         token = AuthToken.objects.select_related('user').get(token=auth_token)
         
         # Check if token is valid
         if not token.is_valid():
+            logger.warning(f"Token found but expired for user: {token.user.name}")
             return None, Response(
                 {"detail": "Authentication failed due to invalid or missing AuthenticationToken"},
                 status=403
@@ -50,9 +65,14 @@ def authenticate_user(request):
         # Update last used
         token.update_last_used()
         
+        logger.info(f"✓ Authentication successful for user: {token.user.name} (is_admin={token.user.is_admin})")
         return token.user, None
         
     except AuthToken.DoesNotExist:
+        logger.warning(f"✗ Token not found in database: '{auth_token[:20]}...'")
+        # DEBUG: Show what tokens ARE in the database
+        all_tokens = AuthToken.objects.all()
+        logger.info(f"Available tokens in DB ({all_tokens.count()}): {[t.token[:30]+'...' for t in all_tokens[:5]]}")
         return None, Response(
             {"detail": "Authentication failed due to invalid or missing AuthenticationToken"},
             status=403
