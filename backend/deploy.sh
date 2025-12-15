@@ -3,7 +3,7 @@
 BASE_REPO="748442897107.dkr.ecr.us-east-2.amazonaws.com"
 REPO="748442897107.dkr.ecr.us-east-2.amazonaws.com/461-project/backend:latest"
 
-# Login to ECR
+# Login to ECR 
 aws ecr get-login-password --region us-east-2 \
   | docker login --username AWS --password-stdin $BASE_REPO
 
