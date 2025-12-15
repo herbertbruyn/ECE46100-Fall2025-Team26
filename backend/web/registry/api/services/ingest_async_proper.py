@@ -19,7 +19,7 @@ from api.models import Artifact
 
 logger = logging.getLogger(__name__)
 
-SCORE_THRESHOLD = 0.0  # Minimum score for each metric to pass quality gate
+SCORE_THRESHOLD = 0.5  # Minimum score for each metric to pass quality gate
 
 class AsyncIngestService:
     """
