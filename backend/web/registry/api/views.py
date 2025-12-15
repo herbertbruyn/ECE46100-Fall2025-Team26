@@ -666,6 +666,9 @@ def artifacts_list(request):
                 else:
                     # No more pending artifacts and count stable - done
                     break
+            
+            # Query final ready artifacts after polling
+            qs = Artifact.objects.filter(status__in=valid_statuses)
 
         else:
             # Specific name: wait for that artifact to become ready
