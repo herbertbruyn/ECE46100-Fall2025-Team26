@@ -122,7 +122,7 @@ def extract_parent_model(artifact):
 
 ###################################### API Views ######################################
 @api_view(["DELETE"])
-# @require_admin
+@require_admin
 def reset_registry(request):
     """DELETE /reset - Reset registry to default state"""
     import boto3
@@ -225,7 +225,7 @@ def health(request):
     return Response({"status": "ok"}, status=200)
 
 @api_view(["POST"])
-# @require_auth
+@require_auth
 def artifact_create(request, artifact_type: str):
     """
     POST /artifact/{artifact_type}
@@ -282,7 +282,7 @@ def artifact_create(request, artifact_type: str):
 
 
 @api_view(["GET", "PUT", "DELETE"])
-# @require_auth
+@require_auth
 def artifact_details(request, artifact_type: str, id: int):
     """GET, PUT, DELETE /artifacts/{artifact_type}/{id}"""
     import time
@@ -431,7 +431,7 @@ def artifact_details(request, artifact_type: str, id: int):
 
 
 @api_view(["GET"])
-# @require_auth
+@require_auth
 def model_rate(request, id: int):
     """
     GET /artifact/model/{id}/rate
@@ -515,7 +515,7 @@ def model_rate(request, id: int):
 
 
 @api_view(["POST"])
-# @require_auth
+@require_auth
 def artifact_by_regex(request):
     """POST /artifact/byRegEx - with blocking until artifacts are ready"""
     import time as time_module
@@ -592,7 +592,7 @@ def artifact_by_regex(request):
 
 
 @api_view(["POST"])
-# @require_auth
+@require_auth
 def artifacts_list(request):
     """POST /artifacts"""
     import time
@@ -735,7 +735,7 @@ def artifacts_list(request):
 
 
 @api_view(["GET"])
-# @require_auth
+@require_auth
 def artifact_cost(request, artifact_type: str, id: int):
     """GET /artifact/{artifact_type}/{id}/cost"""
     obj = get_object_or_404(Artifact, pk=id, type=artifact_type)
@@ -859,7 +859,7 @@ def artifact_lineage(request, id: int):
 
 
 @api_view(["POST"])
-#@require_auth
+@require_auth
 def artifact_license_check(request, id: int):
     """POST /artifact/model/{id}/license-check - Check license compatibility"""
     import requests
