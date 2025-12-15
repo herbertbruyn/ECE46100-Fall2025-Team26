@@ -340,7 +340,7 @@ class AsyncIngestService:
                 pass
 
     def _parse_repo_id(self, source_url: str) -> Optional[str]:
-        """Extract repo_id from HuggingFace or GitHub URL"""
+        """Extract repo_id from HuggingFace, GitHub, or Kaggle URL"""
         url = source_url.rstrip('/')
 
         # Handle HuggingFace URLs
@@ -360,6 +360,29 @@ class AsyncIngestService:
                 if repo_name.endswith('.git'):
                     repo_name = repo_name[:-4]
                 return f"{parts[0]}/{repo_name}"
+            return None
+
+        # Handle Kaggle URLs
+        if 'kaggle.com/' in url:
+            # Import Kaggle manager to parse URL
+            src_path = os.path.join(os.path.dirname(__file__), '../../../../src')
+            if os.path.exists(src_path) and src_path not in sys.path:
+                sys.path.insert(0, src_path)
+
+            try:
+                from lib.Kaggle_API_Manager import KaggleAPIManager
+                kaggle_manager = KaggleAPIManager()
+                parsed = kaggle_manager.parse_kaggle_url(url)
+                if parsed:
+                    owner, dataset_name = parsed
+                    return f"{owner}/{dataset_name}"
+            except Exception as e:
+                logger.warning(f"Failed to parse Kaggle URL: {e}")
+                # Fallback: simple regex parsing
+                import re
+                match = re.search(r'kaggle\.com/datasets/([^/]+)/([^/?]+)', url)
+                if match:
+                    return f"{match.group(1)}/{match.group(2)}"
             return None
 
         return None

@@ -14,6 +14,7 @@ Key improvements:
 """
 import os
 import io
+import sys
 import logging
 import hashlib
 from typing import Dict, Tuple, Optional
@@ -23,6 +24,10 @@ from huggingface_hub import HfApi, hf_hub_url
 import requests
 
 logger = logging.getLogger(__name__)
+
+# Size threshold for large datasets (5GB)
+# Datasets larger than this will only have metadata ingested, not full data
+LARGE_DATASET_THRESHOLD_BYTES = 5 * 1024 * 1024 * 1024  # 5GB
 
 
 class S3ZeroDiskIngest:
@@ -63,9 +68,22 @@ class S3ZeroDiskIngest:
 
         # Check if this is a GitHub repo (for code artifacts)
         is_github = source_url and 'github.com' in source_url
+        is_kaggle = source_url and 'kaggle.com' in source_url
 
         if is_github:
             return self._download_github_repo_to_s3(repo_id, output_zip_key, revision)
+
+        if is_kaggle:
+            # Parse Kaggle URL to extract owner and dataset name
+            # repo_id for Kaggle is in format "owner/dataset-name"
+            parts = repo_id.split('/')
+            if len(parts) >= 2:
+                owner = parts[0]
+                dataset_name = parts[1]
+                logger.info(f"Detected Kaggle dataset: {owner}/{dataset_name}")
+                return self._download_kaggle_dataset_to_s3(owner, dataset_name, output_zip_key)
+            else:
+                raise ValueError(f"Invalid Kaggle repo_id format: {repo_id}")
 
         hf_api = HfApi()
 
@@ -601,6 +619,396 @@ class S3ZeroDiskIngest:
                 except:
                     pass
             raise
+
+    def _download_kaggle_dataset_to_s3(
+        self,
+        owner: str,
+        dataset_name: str,
+        output_zip_key: str
+    ) -> Tuple[str, int]:
+        """
+        Download Kaggle dataset to S3 with size checking
+
+        If dataset is larger than LARGE_DATASET_THRESHOLD_BYTES (5GB),
+        only metadata is ingested (no actual data download).
+
+        Args:
+            owner: Kaggle dataset owner
+            dataset_name: Dataset name/slug
+            output_zip_key: S3 key for output ZIP
+
+        Returns:
+            Tuple of (sha256_hash, size_bytes)
+        """
+        # Import Kaggle manager
+        src_path = os.path.join(os.path.dirname(__file__), '../../../../src')
+        if os.path.exists(src_path) and src_path not in sys.path:
+            sys.path.insert(0, src_path)
+
+        try:
+            from lib.Kaggle_API_Manager import get_kaggle_manager
+        except ImportError as e:
+            logger.error(f"Failed to import Kaggle API Manager: {e}")
+            raise RuntimeError("Kaggle integration not available")
+
+        kaggle_manager = get_kaggle_manager()
+        if not kaggle_manager:
+            raise RuntimeError("Kaggle API not configured (KAGGLE_USERNAME/KAGGLE_KEY missing)")
+
+        logger.info(f"Processing Kaggle dataset: {owner}/{dataset_name}")
+
+        # Check dataset size first
+        dataset_size = kaggle_manager.get_dataset_size(owner, dataset_name)
+        if dataset_size is None:
+            logger.warning(f"Could not determine dataset size for {owner}/{dataset_name}, proceeding with metadata-only")
+            dataset_size = LARGE_DATASET_THRESHOLD_BYTES + 1  # Force metadata-only
+
+        size_gb = dataset_size / (1024**3)
+        threshold_gb = LARGE_DATASET_THRESHOLD_BYTES / (1024**3)
+
+        if dataset_size > LARGE_DATASET_THRESHOLD_BYTES:
+            logger.info(f"Dataset size ({size_gb:.2f} GB) exceeds threshold ({threshold_gb:.2f} GB)")
+            logger.info(f"Ingesting metadata only (no full dataset download)")
+
+            # Create metadata-only ZIP
+            return self._create_kaggle_metadata_zip(owner, dataset_name, output_zip_key, kaggle_manager)
+        else:
+            logger.info(f"Dataset size ({size_gb:.2f} GB) is below threshold ({threshold_gb:.2f} GB)")
+            logger.info(f"Proceeding with full dataset download")
+
+            # Download full dataset
+            return self._download_full_kaggle_dataset(owner, dataset_name, output_zip_key, kaggle_manager)
+
+    def _create_kaggle_metadata_zip(
+        self,
+        owner: str,
+        dataset_name: str,
+        output_zip_key: str,
+        kaggle_manager
+    ) -> Tuple[str, int]:
+        """
+        Create a ZIP with only Kaggle dataset metadata (no actual data)
+
+        Args:
+            owner: Kaggle dataset owner
+            dataset_name: Dataset name/slug
+            output_zip_key: S3 key for output ZIP
+            kaggle_manager: KaggleAPIManager instance
+
+        Returns:
+            Tuple of (sha256_hash, size_bytes)
+        """
+        logger.info(f"Creating metadata-only ZIP for {owner}/{dataset_name}")
+
+        # Get metadata summary (README, metadata.json, etc.)
+        metadata_files = kaggle_manager.create_metadata_summary(owner, dataset_name)
+        if not metadata_files:
+            raise RuntimeError(f"Failed to fetch metadata for {owner}/{dataset_name}")
+
+        # Create ZIP in S3 with metadata files
+        import struct
+        import zipfile
+        import time
+
+        upload_id = None
+        try:
+            # Initialize multipart upload
+            upload_id = self.s3_client.create_multipart_upload(
+                Bucket=self.bucket,
+                Key=output_zip_key,
+                ContentType='application/zip'
+            )['UploadId']
+
+            parts = []
+            sha256_hash = hashlib.sha256()
+            total_size = 0
+
+            # Create ZIP structure in memory
+            upload_buffer = io.BytesIO()
+            central_directory = []
+            offset = 0
+
+            for filename, content in metadata_files.items():
+                # Local file header
+                mod_time = time.localtime()
+                dos_time = (mod_time.tm_hour << 11) | (mod_time.tm_min << 5) | (mod_time.tm_sec // 2)
+                dos_date = ((mod_time.tm_year - 1980) << 9) | (mod_time.tm_mon << 5) | mod_time.tm_mday
+
+                crc = hashlib.md5(content).hexdigest()[:8]  # Simplified CRC
+                compressed_size = len(content)
+                uncompressed_size = len(content)
+
+                local_header = struct.pack('<I', 0x04034b50)  # Local file header signature
+                local_header += struct.pack('<H', 20)  # Version needed
+                local_header += struct.pack('<H', 0)   # Flags
+                local_header += struct.pack('<H', 0)   # Compression (stored)
+                local_header += struct.pack('<H', dos_time)
+                local_header += struct.pack('<H', dos_date)
+                local_header += struct.pack('<I', int(crc, 16))  # CRC-32
+                local_header += struct.pack('<I', compressed_size)
+                local_header += struct.pack('<I', uncompressed_size)
+                local_header += struct.pack('<H', len(filename))
+                local_header += struct.pack('<H', 0)   # Extra field length
+                local_header += filename.encode('utf-8')
+
+                upload_buffer.write(local_header)
+                sha256_hash.update(local_header)
+
+                upload_buffer.write(content)
+                sha256_hash.update(content)
+
+                # Store info for central directory
+                central_directory.append({
+                    'filename': filename,
+                    'offset': offset,
+                    'crc': int(crc, 16),
+                    'compressed_size': compressed_size,
+                    'uncompressed_size': uncompressed_size,
+                    'dos_time': dos_time,
+                    'dos_date': dos_date
+                })
+
+                offset += len(local_header) + len(content)
+
+            # Upload the file data
+            upload_buffer.seek(0)
+            part_data = upload_buffer.read()
+
+            response_part = self.s3_client.upload_part(
+                Bucket=self.bucket,
+                Key=output_zip_key,
+                PartNumber=1,
+                UploadId=upload_id,
+                Body=part_data
+            )
+
+            parts.append({'PartNumber': 1, 'ETag': response_part['ETag']})
+            total_size += len(part_data)
+
+            # Create central directory
+            central_dir_data = io.BytesIO()
+            central_dir_start = offset
+
+            for entry in central_directory:
+                cd_header = struct.pack('<I', 0x02014b50)  # Central directory signature
+                cd_header += struct.pack('<H', 20)  # Version made by
+                cd_header += struct.pack('<H', 20)  # Version needed
+                cd_header += struct.pack('<H', 0)   # Flags
+                cd_header += struct.pack('<H', 0)   # Compression
+                cd_header += struct.pack('<H', entry['dos_time'])
+                cd_header += struct.pack('<H', entry['dos_date'])
+                cd_header += struct.pack('<I', entry['crc'])
+                cd_header += struct.pack('<I', entry['compressed_size'])
+                cd_header += struct.pack('<I', entry['uncompressed_size'])
+                cd_header += struct.pack('<H', len(entry['filename']))
+                cd_header += struct.pack('<H', 0)   # Extra field
+                cd_header += struct.pack('<H', 0)   # Comment length
+                cd_header += struct.pack('<H', 0)   # Disk number
+                cd_header += struct.pack('<H', 0)   # Internal attributes
+                cd_header += struct.pack('<I', 0)   # External attributes
+                cd_header += struct.pack('<I', entry['offset'])
+                cd_header += entry['filename'].encode('utf-8')
+
+                central_dir_data.write(cd_header)
+                offset += len(cd_header)
+
+            central_dir_bytes = central_dir_data.getvalue()
+
+            # End of central directory
+            eocd = struct.pack('<I', 0x06054b50)  # EOCD signature
+            eocd += struct.pack('<H', 0)   # Disk number
+            eocd += struct.pack('<H', 0)   # Disk with central dir
+            eocd += struct.pack('<H', len(central_directory))
+            eocd += struct.pack('<H', len(central_directory))
+            eocd += struct.pack('<I', len(central_dir_bytes))
+            eocd += struct.pack('<I', central_dir_start)
+            eocd += struct.pack('<H', 0)   # Comment length
+
+            # Upload central directory + EOCD
+            final_buffer = io.BytesIO()
+            final_buffer.write(central_dir_bytes)
+            final_buffer.write(eocd)
+            final_buffer.seek(0)
+            final_data = final_buffer.read()
+
+            sha256_hash.update(final_data)
+
+            response_part = self.s3_client.upload_part(
+                Bucket=self.bucket,
+                Key=output_zip_key,
+                PartNumber=2,
+                UploadId=upload_id,
+                Body=final_data
+            )
+
+            parts.append({'PartNumber': 2, 'ETag': response_part['ETag']})
+            total_size += len(final_data)
+
+            # Complete multipart upload
+            self.s3_client.complete_multipart_upload(
+                Bucket=self.bucket,
+                Key=output_zip_key,
+                UploadId=upload_id,
+                MultipartUpload={'Parts': parts}
+            )
+
+            digest = sha256_hash.hexdigest()
+            logger.info(f"Kaggle metadata ZIP created: {total_size} bytes, SHA256: {digest[:16]}...")
+            logger.info(f"Included files: {list(metadata_files.keys())}")
+
+            return digest, total_size
+
+        except Exception as e:
+            logger.error(f"Failed to create Kaggle metadata ZIP: {e}")
+            if upload_id:
+                try:
+                    self.s3_client.abort_multipart_upload(
+                        Bucket=self.bucket,
+                        Key=output_zip_key,
+                        UploadId=upload_id
+                    )
+                except:
+                    pass
+            raise
+
+    def _download_full_kaggle_dataset(
+        self,
+        owner: str,
+        dataset_name: str,
+        output_zip_key: str,
+        kaggle_manager
+    ) -> Tuple[str, int]:
+        """
+        Download full Kaggle dataset and upload to S3
+
+        Uses kaggle CLI to download dataset to temp directory,
+        then streams to S3.
+
+        Args:
+            owner: Kaggle dataset owner
+            dataset_name: Dataset name/slug
+            output_zip_key: S3 key for output ZIP
+            kaggle_manager: KaggleAPIManager instance
+
+        Returns:
+            Tuple of (sha256_hash, size_bytes)
+        """
+        import tempfile
+        import subprocess
+        import shutil
+        import zipfile
+
+        logger.info(f"Downloading full Kaggle dataset: {owner}/{dataset_name}")
+
+        temp_dir = tempfile.mkdtemp(prefix='kaggle_')
+        try:
+            # Download using kaggle CLI
+            dataset_ref = f'{owner}/{dataset_name}'
+            cmd = ['kaggle', 'datasets', 'download', '-d', dataset_ref, '-p', temp_dir]
+
+            logger.info(f"Running: {' '.join(cmd)}")
+
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=3600  # 1 hour timeout
+            )
+
+            if result.returncode != 0:
+                logger.error(f"Kaggle download failed: {result.stderr}")
+                raise RuntimeError(f"Failed to download Kaggle dataset: {result.stderr}")
+
+            logger.info(f"Download completed to {temp_dir}")
+
+            # Find downloaded ZIP file
+            downloaded_files = os.listdir(temp_dir)
+            zip_file = None
+            for f in downloaded_files:
+                if f.endswith('.zip'):
+                    zip_file = os.path.join(temp_dir, f)
+                    break
+
+            if not zip_file:
+                raise RuntimeError(f"No ZIP file found in {temp_dir}")
+
+            logger.info(f"Found downloaded ZIP: {zip_file}")
+
+            # Stream ZIP to S3
+            file_size = os.path.getsize(zip_file)
+            logger.info(f"Uploading {file_size} bytes to S3...")
+
+            sha256_hash = hashlib.sha256()
+            upload_id = None
+
+            try:
+                upload_id = self.s3_client.create_multipart_upload(
+                    Bucket=self.bucket,
+                    Key=output_zip_key,
+                    ContentType='application/zip'
+                )['UploadId']
+
+                parts = []
+                part_number = 1
+                chunk_size = 10 * 1024 * 1024  # 10MB chunks
+                total_uploaded = 0
+
+                with open(zip_file, 'rb') as f:
+                    while True:
+                        chunk = f.read(chunk_size)
+                        if not chunk:
+                            break
+
+                        sha256_hash.update(chunk)
+
+                        response_part = self.s3_client.upload_part(
+                            Bucket=self.bucket,
+                            Key=output_zip_key,
+                            PartNumber=part_number,
+                            UploadId=upload_id,
+                            Body=chunk
+                        )
+
+                        parts.append({'PartNumber': part_number, 'ETag': response_part['ETag']})
+                        total_uploaded += len(chunk)
+                        part_number += 1
+
+                        if part_number % 10 == 0:
+                            logger.info(f"Uploaded {total_uploaded / (1024**2):.2f} MB...")
+
+                # Complete upload
+                self.s3_client.complete_multipart_upload(
+                    Bucket=self.bucket,
+                    Key=output_zip_key,
+                    UploadId=upload_id,
+                    MultipartUpload={'Parts': parts}
+                )
+
+                digest = sha256_hash.hexdigest()
+                logger.info(f"Kaggle dataset uploaded: {total_uploaded} bytes, SHA256: {digest[:16]}...")
+
+                return digest, total_uploaded
+
+            except Exception as e:
+                logger.error(f"Failed to upload Kaggle dataset to S3: {e}")
+                if upload_id:
+                    try:
+                        self.s3_client.abort_multipart_upload(
+                            Bucket=self.bucket,
+                            Key=output_zip_key,
+                            UploadId=upload_id
+                        )
+                    except:
+                        pass
+                raise
+
+        finally:
+            # Clean up temp directory
+            try:
+                shutil.rmtree(temp_dir)
+                logger.info(f"Cleaned up temp directory: {temp_dir}")
+            except Exception as e:
+                logger.warning(f"Failed to clean up temp directory: {e}")
 
     def get_s3_presigned_url(self, s3_key: str, expiration: int = 3600) -> str:
         """Generate presigned URL for downloading"""
