@@ -10,12 +10,14 @@ import type { Artifact, ModelRating, CostResult } from '../types';
 import StatusBadge from '../components/StatusBadge';
 import MetricsDisplay from '../components/MetricsDisplay';
 import LoadingSpinner from '../components/LoadingSpinner';
+import LicenseCheck from '../components/LicenseCheck';
+import LineageGraph from '../components/LineageGraph';
 import { useToast } from '../components/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { formatBytes, formatDate } from '../utils/format';
 
 export default function ArtifactDetailPage() {
-  const { type, id } = useParams<{ type: string; id: string }>();
+  const { id } = useParams<{ id: string }>();
   const [artifact, setArtifact] = useState<Artifact | null>(null);
   const [rating, setRating] = useState<ModelRating | null>(null);
   const [cost, setCost] = useState<CostResult | null>(null);
@@ -29,15 +31,36 @@ export default function ArtifactDetailPage() {
 
   useEffect(() => {
     loadArtifact();
-  }, [type, id]);
+  }, [id]);
 
   const loadArtifact = async () => {
+    if (!id) return;
+    
     try {
-      const data = await apiService.getArtifact(type as any, Number(id));
+      // Try to get artifact by ID - we'll need to try different types
+      // First try model, then dataset, then code
+      let data: Artifact | null = null;
+      let artifactType: string = 'model';
+      
+      for (const type of ['model', 'dataset', 'code'] as const) {
+        try {
+          data = await apiService.getArtifact(type, Number(id));
+          artifactType = type;
+          break;
+        } catch (err) {
+          // Try next type
+          continue;
+        }
+      }
+      
+      if (!data) {
+        throw new Error('Artifact not found');
+      }
+      
       setArtifact(data);
 
       // Load rating for models
-      if (type === 'model' && data.status === 'completed') {
+      if (artifactType === 'model' && data.status === 'completed') {
         try {
           const ratingData = await apiService.getModelRating(Number(id));
           setRating(ratingData);
@@ -228,8 +251,18 @@ export default function ArtifactDetailPage() {
       )}
 
       {/* Metrics (for models) */}
-      {type === 'model' && rating && (
+      {artifact.type === 'model' && rating && (
         <MetricsDisplay rating={rating} />
+      )}
+
+      {/* License Check (for models) */}
+      {artifact.type === 'model' && artifact.status === 'completed' && (
+        <LicenseCheck modelId={artifact.id} />
+      )}
+
+      {/* Lineage Graph (for models) */}
+      {artifact.type === 'model' && (
+        <LineageGraph modelId={artifact.id} />
       )}
 
       {/* Status Message */}
