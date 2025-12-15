@@ -208,3 +208,7 @@ CORS_ALLOW_HEADERS = [
     'x-requested-with',
     'x-authorization',
 ]
+
+CORS_EXPOSE_HEADERS = [
+    'x-authorization',
+]
