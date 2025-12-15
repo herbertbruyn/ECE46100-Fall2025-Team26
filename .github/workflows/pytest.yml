@@ -29,6 +29,7 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         if [ -f backend/requirements.txt ]; then pip install -r backend/requirements.txt; fi
+        # Ensure pytest-cov is installed for coverage reporting
         pip install pytest pytest-cov coverage
 
     - name: Run Pytest
@@ -44,5 +45,7 @@ jobs:
         POSTGRES_PASSWORD: "password"
         POSTGRES_HOST: "localhost"
       run: |
-        # Run pytest using the configuration file in the root
-        python -m pytest -c pytest.ini
+        # Run pytest with coverage flags:
+        # --cov=backend/src: Measures coverage for your source code folder
+        # --cov-report=term-missing: Prints the table to the console logs and lists missing lines
+        python -m pytest -c pytest.ini --cov=backend/src --cov-report=term-missing
