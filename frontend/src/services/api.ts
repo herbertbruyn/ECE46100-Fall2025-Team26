@@ -27,9 +27,8 @@ class ApiService {
     });
 
     this.api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
-      // TESTING MODE: Use a mock token for all requests
-      const token = localStorage.getItem('token') || 'mock-test-token';
-      if (config.headers) {
+      const token = localStorage.getItem('token');
+      if (token && config.headers) {
         config.headers['X-Authorization'] = token;
       }
       return config;
