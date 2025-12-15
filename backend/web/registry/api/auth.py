@@ -33,14 +33,11 @@ def authenticate_user(request):
     logger.info(f"=== AUTH DEBUG ===")
     logger.info(f"X-Authorization header: {request.headers.get('X-Authorization')}")
     logger.info(f"Authorization header: {request.headers.get('Authorization')}")
-    logger.info(f"auth_token (before stripping): '{auth_token}'")
+    logger.info(f"auth_token: '{auth_token}'")
 
-    # Strip "bearer " or "Token " prefix if present
-    if auth_token and ' ' in auth_token:
-        auth_token = auth_token.split(' ', 1)[1]
-        logger.info(f"auth_token (after stripping): '{auth_token}'")
-    else:
-        logger.info(f"No prefix to strip (or no token)")
+    # Don't strip the prefix - we store tokens with "bearer " in the database
+    # The token should be looked up exactly as received
+    logger.info(f"Using token as-is (no stripping) for database lookup")
 
     if not auth_token:
         logger.warning("No auth token provided")
