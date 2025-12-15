@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { GitBranch, Loader, AlertCircle, ExternalLink } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { GitBranch, AlertCircle, ExternalLink } from 'lucide-react';
 import apiService from '../services/api';
 import LoadingSpinner from './LoadingSpinner';
 
@@ -138,9 +138,8 @@ export function LineageGraph({ modelId }: LineageGraphProps) {
         backgroundColor: 'var(--bg-tertiary)',
         borderRadius: '8px',
       }}>
-        {nodes.map((node, index) => {
+        {nodes.map((node) => {
           const isCurrentModel = node.artifact_id === modelId;
-          const incomingEdges = edges.filter(e => e.to_node_artifact_id === node.artifact_id);
           const outgoingEdges = edges.filter(e => e.from_node_artifact_id === node.artifact_id);
 
           return (

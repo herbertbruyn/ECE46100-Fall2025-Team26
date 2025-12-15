@@ -201,21 +201,6 @@ export function LoginPage() {
             {loading ? 'Signing in...' : 'Sign In'}
           </button>
         </form>
-
-        <div style={{
-          marginTop: '2rem',
-          padding: '1rem',
-          backgroundColor: 'var(--info-bg, rgba(33, 150, 243, 0.1))',
-          border: '1px solid var(--info, #2196F3)',
-          borderRadius: '8px',
-          fontSize: '0.75rem',
-          color: 'var(--text-secondary)',
-        }}>
-          <strong style={{ color: 'var(--info)' }}>Default Credentials:</strong><br />
-          Username: ece30861defaultadminuser<br />
-          Password: correcthorsebatterystaple123(!__+@**(A'"`;DROP TABLE artifacts;<br />
-          Check "Administrator" for admin access
-        </div>
       </div>
 
       {toast && (
