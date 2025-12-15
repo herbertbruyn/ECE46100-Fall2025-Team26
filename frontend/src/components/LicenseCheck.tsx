@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Shield, AlertCircle, CheckCircle, Loader, Github } from 'lucide-react';
 import apiService from '../services/api';
 
