@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { 
   Download, Edit, Trash2, DollarSign, ArrowLeft, 
-  ExternalLink, Calendar, Hash, HardDrive 
+  ExternalLink, Calendar, Hash, HardDrive, GitBranch, Shield
 } from 'lucide-react';
 import apiService from '../services/api';
 import type { Artifact, ModelRating, CostResult } from '../types';
@@ -184,6 +184,32 @@ export default function ArtifactDetailPage() {
               <DollarSign size={18} />
               {loadingCost ? 'Calculating...' : 'Calculate Cost'}
             </button>
+            {artifact.type === 'model' && (
+              <a 
+                href="#lineage" 
+                className="btn btn-secondary"
+                onClick={(e) => {
+                  e.preventDefault();
+                  document.getElementById('lineage-section')?.scrollIntoView({ behavior: 'smooth' });
+                }}
+              >
+                <GitBranch size={18} />
+                View Lineage
+              </a>
+            )}
+            {artifact.type === 'model' && artifact.status === 'completed' && (
+              <a 
+                href="#license-check" 
+                className="btn btn-secondary"
+                onClick={(e) => {
+                  e.preventDefault();
+                  document.getElementById('license-check-section')?.scrollIntoView({ behavior: 'smooth' });
+                }}
+              >
+                <Shield size={18} />
+                License Check
+              </a>
+            )}
           </div>
         </div>
       </div>
@@ -257,12 +283,16 @@ export default function ArtifactDetailPage() {
 
       {/* License Check (for models) */}
       {artifact.type === 'model' && artifact.status === 'completed' && (
-        <LicenseCheck modelId={artifact.id} />
+        <div id="license-check-section">
+          <LicenseCheck modelId={artifact.id} />
+        </div>
       )}
 
       {/* Lineage Graph (for models) */}
       {artifact.type === 'model' && (
-        <LineageGraph modelId={artifact.id} />
+        <div id="lineage-section">
+          <LineageGraph modelId={artifact.id} />
+        </div>
       )}
 
       {/* Status Message */}

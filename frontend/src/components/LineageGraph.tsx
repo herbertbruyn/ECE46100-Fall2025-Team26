@@ -27,7 +27,7 @@ export function LineageGraph({ modelId }: LineageGraphProps) {
 
   useEffect(() => {
     loadLineage();
-  }, [modelId]);
+  }, [modelId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadLineage = async () => {
     setLoading(true);
