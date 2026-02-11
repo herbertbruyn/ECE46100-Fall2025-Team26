@@ -35,7 +35,7 @@ The platform helps engineers quickly assess which models are safe and easy to ad
 - **Activity Logging:** Audit trail of all submissions, evaluations, and modifications
 - **Docker Support:** Containerized deployment for easy scaling
 
-## Prerequisites
+## Prerequisites 
 
 - **Python 3.11 or higher**
 - **Node.js 18 or higher** (for frontend development)
